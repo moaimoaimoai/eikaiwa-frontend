@@ -108,7 +108,7 @@ export default function VocabularyScreen() {
   });
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       {/* ── グラデーションヘッダー ── */}
       <LinearGradient colors={['#D97706', '#7C3AED']} style={styles.header} start={{x:0,y:0}} end={{x:1,y:1}}>
         <View style={styles.headerTop}>

@@ -8,7 +8,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Audio } from 'expo-av';
-import { phrasesService } from '../../services/phrases';
+import { phrasesService, AIPhrase } from '../../services/phrases';
 import { conversationService } from '../../services/conversation';
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
@@ -25,13 +25,66 @@ const TAB_CONFIG: { id: Tab; label: string; icon: keyof typeof Ionicons.glyphMap
   { id: 'quiz',    label: 'クイズ',   icon: 'help-circle' },
 ];
 
+/** カードに表示する統一フレーズ型（DB・AI両対応） */
+export interface DisplayPhrase {
+  id?: number;
+  hash?: string;
+  english: string;
+  japanese: string;
+  pronunciation_hint?: string;
+  example_context?: string;
+  category_name?: string;
+  isAI: boolean;
+}
+
+function dbToDisplay(p: Phrase): DisplayPhrase {
+  return {
+    id: p.id,
+    english: p.english,
+    japanese: p.japanese,
+    pronunciation_hint: p.pronunciation_hint,
+    example_context: p.example_context,
+    category_name: p.category_name,
+    isAI: false,
+  };
+}
+
+function aiToDisplay(p: AIPhrase): DisplayPhrase {
+  return {
+    hash: p.hash,
+    english: p.english,
+    japanese: p.japanese,
+    pronunciation_hint: p.pronunciation_hint,
+    example_context: p.example_context,
+    category_name: p.category_label,
+    isAI: true,
+  };
+}
+
 export default function WarmupScreen() {
   const [activeTab, setActiveTab] = useState<Tab>('phrases');
+
+  // DB フレーズ
   const [phrases, setPhrases] = useState<Phrase[]>([]);
-  const [loading, setLoading] = useState(true);
+  // AI フレーズ（現在のバッチ）
+  const [aiPhrases, setAIPhrases] = useState<AIPhrase[]>([]);
+  // カードに表示するフレーズ（DB or AI を統一して管理）
+  const [displayPhrases, setDisplayPhrases] = useState<DisplayPhrase[]>([]);
+  // 今日確認したフレーズ（カードを次へ進めたもの）
+  const [reviewedToday, setReviewedToday] = useState<DisplayPhrase[]>([]);
+
+  const [loading, setLoading] = useState(false); // クイズロード用
+  const [aiLoading, setAILoading] = useState(false);
+
+  // AI 生成残り回数
+  const [remainingToday, setRemainingToday] = useState<number | null>(null);
+  const [dailyLimit, setDailyLimit] = useState(5);
+  const [limitReached, setLimitReached] = useState(false);
+
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showJapanese, setShowJapanese] = useState(false);
   const [speakingId, setSpeakingId] = useState<number | null>(null);
+  const [speakingHash, setSpeakingHash] = useState<string | null>(null);
   const [sound, setSound] = useState<Audio.Sound | null>(null);
 
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
@@ -40,24 +93,106 @@ export default function WarmupScreen() {
   const [quizScore, setQuizScore] = useState(0);
   const [quizDone, setQuizDone] = useState(false);
   const [quizType, setQuizType] = useState<'phrases' | 'words'>('phrases');
-  /** フレーズの表示方向: en→ja（英語を見て日本語を当てる）or ja→en（日本語を見て英語を当てる） */
   const [flipMode, setFlipMode] = useState<'en-ja' | 'ja-en'>('en-ja');
 
   useEffect(() => {
-    loadPhrases();
+    // DB フレーズ（クイズ用）を先にロードし、その後 AI フレーズをロード
+    // AI ロード中はローディング画面を表示するため、最初は aiLoading=true にしておく
+    const init = async () => {
+      await loadPhrases();   // DB フレーズを取得（クイズ・フォールバック用）
+      await loadAIPhrases(); // AI フレーズを取得してカードに反映
+    };
+    init();
     return () => { sound?.unloadAsync(); };
   }, []);
 
   const loadPhrases = async () => {
     try {
-      setLoading(true);
       const data = await phrasesService.getWarmupPhrases();
       setPhrases(data);
+      // DB フレーズは displayPhrases に入れない（AI フレーズが優先）
+      // ただし AI が失敗したときのフォールバックとして phrases に保持
     } catch (e) {
       console.error(e);
-    } finally {
-      setLoading(false);
     }
+  };
+
+  const loadAIPhrases = async () => {
+    try {
+      setAILoading(true);
+      const result = await phrasesService.getAIWarmupPhrases();
+      setAIPhrases(result.phrases);
+
+      if (result.remaining_today !== null) setRemainingToday(result.remaining_today);
+      if (result.daily_limit) setDailyLimit(result.daily_limit);
+      setLimitReached(false);
+
+      // AI フレーズをカードに反映
+      if (result.phrases.length > 0) {
+        setDisplayPhrases(result.phrases.map(aiToDisplay));
+        setCurrentIndex(0);
+        setShowJapanese(false);
+      }
+    } catch (e: any) {
+      const responseData = e?.response?.data;
+      if (e?.response?.status === 429) {
+        // 1日上限に達した → DB フレーズにフォールバック
+        setLimitReached(true);
+        setRemainingToday(0);
+      }
+      // エラー時は DB フレーズをカードに表示
+      setPhrases(prev => {
+        if (prev.length > 0) setDisplayPhrases(prev.map(dbToDisplay));
+        return prev;
+      });
+      console.error('AI phrases error:', JSON.stringify(responseData));
+    } finally {
+      setAILoading(false);
+    }
+  };
+
+  const speakAIPhrase = async (phrase: AIPhrase) => {
+    if (speakingHash === phrase.hash) return;
+    setSpeakingHash(phrase.hash);
+    try {
+      if (sound) { await sound.unloadAsync(); }
+      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, allowsRecordingIOS: false, staysActiveInBackground: false });
+      const audioBase64 = await conversationService.synthesizeSpeech(phrase.english, 'nova');
+      const { sound: newSound } = await Audio.Sound.createAsync(
+        { uri: `data:audio/mp3;base64,${audioBase64}` },
+        { shouldPlay: true }
+      );
+      setSound(newSound);
+      newSound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) setSpeakingHash(null);
+      });
+    } catch { setSpeakingHash(null); }
+  };
+
+  const speakDisplayPhrase = async (phrase: DisplayPhrase) => {
+    if (phrase.isAI && phrase.hash) {
+      const ai = aiPhrases.find(p => p.hash === phrase.hash);
+      if (ai) { await speakAIPhrase(ai); return; }
+    }
+    if (!phrase.isAI && phrase.id) {
+      const db = phrases.find(p => p.id === phrase.id);
+      if (db) { await speakPhrase(db); return; }
+    }
+    // フォールバック: テキストで直接再生
+    setSpeakingHash(phrase.hash ?? null);
+    try {
+      if (sound) await sound.unloadAsync();
+      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, allowsRecordingIOS: false, staysActiveInBackground: false });
+      const audioBase64 = await conversationService.synthesizeSpeech(phrase.english, 'nova');
+      const { sound: newSound } = await Audio.Sound.createAsync(
+        { uri: `data:audio/mp3;base64,${audioBase64}` },
+        { shouldPlay: true }
+      );
+      setSound(newSound);
+      newSound.setOnPlaybackStatusUpdate((s) => {
+        if (s.isLoaded && s.didJustFinish) setSpeakingHash(null);
+      });
+    } catch { setSpeakingHash(null); }
   };
 
   const loadQuiz = async (type: 'phrases' | 'words') => {
@@ -93,11 +228,22 @@ export default function WarmupScreen() {
     } catch { setSpeakingId(null); }
   };
 
+  /** 現在のカードを「確認済み」として記録し、次へ進む */
   const nextPhrase = () => {
-    if (currentIndex < phrases.length - 1) {
+    if (currentIndex < displayPhrases.length - 1) {
+      const current = displayPhrases[currentIndex];
+      // 確認済みリストに追加（重複なし）
+      setReviewedToday(prev => {
+        const key = current.hash ?? current.id?.toString() ?? current.english;
+        if (prev.some(p => (p.hash ?? p.id?.toString() ?? p.english) === key)) return prev;
+        return [...prev, current];
+      });
       setCurrentIndex(currentIndex + 1);
       setShowJapanese(false);
-      phrasesService.markPhrasePracticed(phrases[currentIndex].id).catch(() => {});
+      // DB フレーズなら practiced を記録
+      if (!current.isAI && current.id) {
+        phrasesService.markPhrasePracticed(current.id).catch(() => {});
+      }
     }
   };
 
@@ -124,7 +270,7 @@ export default function WarmupScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       {/* ── グラデーションヘッダー ── */}
       <LinearGradient colors={['#0891B2', '#4F46E5']} style={styles.header} start={{x:0,y:0}} end={{x:1,y:1}}>
         <View style={styles.headerTop}>
@@ -158,26 +304,45 @@ export default function WarmupScreen() {
       </LinearGradient>
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-        {loading ? (
-          <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 80 }} />
+        {/* AI生成中（初回のみフルスクリーンローダーを表示） */}
+        {activeTab === 'phrases' && aiLoading && displayPhrases.length === 0 ? (
+          <View style={styles.aiInitialLoading}>
+            <View style={styles.aiInitialLoadingIcon}>
+              <Ionicons name="sparkles" size={36} color="#F59E0B" />
+            </View>
+            <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: Spacing.md }} />
+            <Text style={styles.aiInitialLoadingTitle}>AIフレーズを生成中...</Text>
+            <Text style={styles.aiInitialLoadingDesc}>あなただけの今日のフレーズを準備しています</Text>
+          </View>
         ) : activeTab === 'phrases' ? (
           <PhrasesTab
-            phrases={phrases}
+            displayPhrases={displayPhrases}
             currentIndex={currentIndex}
             showJapanese={showJapanese}
             speakingId={speakingId}
+            speakingHash={speakingHash}
             flipMode={flipMode}
             onFlipMode={() => {
               setFlipMode(m => m === 'en-ja' ? 'ja-en' : 'en-ja');
               setShowJapanese(false);
             }}
             onToggleJapanese={() => setShowJapanese(!showJapanese)}
-            onSpeak={speakPhrase}
+            onSpeak={speakDisplayPhrase}
             onNext={nextPhrase}
             onPrev={prevPhrase}
+            aiPhrases={aiPhrases}
+            aiLoading={aiLoading}
+            remainingToday={remainingToday}
+            dailyLimit={dailyLimit}
+            limitReached={limitReached}
+            onReloadAI={loadAIPhrases}
+            reviewedToday={reviewedToday}
+            onSpeakAI={speakAIPhrase}
           />
         ) : activeTab === 'words' ? (
-          <AllPhrasesTab phrases={phrases} onSpeak={speakPhrase} speakingId={speakingId} />
+          phrases.length === 0
+            ? <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 80 }} />
+            : <AllPhrasesTab phrases={phrases} onSpeak={speakPhrase} speakingId={speakingId} />
         ) : (
           <QuizTab
             questions={quizQuestions}
@@ -196,8 +361,16 @@ export default function WarmupScreen() {
   );
 }
 
-function PhrasesTab({ phrases, currentIndex, showJapanese, speakingId, flipMode, onFlipMode, onToggleJapanese, onSpeak, onNext, onPrev }: any) {
-  const current = phrases[currentIndex];
+// ─────────────────────────────────────────────
+// PhrasesTab
+// ─────────────────────────────────────────────
+function PhrasesTab({
+  displayPhrases, currentIndex, showJapanese, speakingId, speakingHash,
+  flipMode, onFlipMode, onToggleJapanese, onSpeak, onNext, onPrev,
+  aiPhrases, aiLoading, remainingToday, dailyLimit, limitReached,
+  onReloadAI, reviewedToday, onSpeakAI,
+}: any) {
+  const current: DisplayPhrase | undefined = displayPhrases[currentIndex];
   const isJaFirst = flipMode === 'ja-en';
 
   if (!current) return (
@@ -207,10 +380,17 @@ function PhrasesTab({ phrases, currentIndex, showJapanese, speakingId, flipMode,
     </View>
   );
 
-  // メインテキスト（常に表示）とサブテキスト（タップで表示）の切り替え
-  const mainText     = isJaFirst ? current.japanese : current.english;
-  const subText      = isJaFirst ? current.english  : current.japanese;
-  const revealLabel  = isJaFirst ? 'タップして英語を表示' : 'タップして日本語を表示';
+  const mainText    = isJaFirst ? current.japanese : current.english;
+  const subText     = isJaFirst ? current.english  : current.japanese;
+  const revealLabel = isJaFirst ? 'タップして英語を表示' : 'タップして日本語を表示';
+  const isSpeaking  = speakingHash === current.hash || speakingId === current.id;
+
+  // 残り回数バッジの色
+  const remainingColor = remainingToday === null
+    ? Colors.textMuted
+    : remainingToday <= 1 ? Colors.error
+    : remainingToday <= 2 ? Colors.warning
+    : Colors.success;
 
   return (
     <View style={styles.phraseTab}>
@@ -234,25 +414,41 @@ function PhrasesTab({ phrases, currentIndex, showJapanese, speakingId, flipMode,
       <View style={styles.progressRow}>
         <View style={styles.progressBar}>
           <LinearGradient
-            colors={['#0891B2', '#4F46E5']}
-            style={[styles.progressFill, { width: `${((currentIndex + 1) / phrases.length) * 100}%` }]}
+            colors={current.isAI ? ['#F59E0B', '#8B5CF6'] : ['#0891B2', '#4F46E5']}
+            style={[styles.progressFill, { width: `${((currentIndex + 1) / displayPhrases.length) * 100}%` }]}
             start={{x:0,y:0}} end={{x:1,y:0}}
           />
         </View>
-        <Text style={styles.progressText}>{currentIndex + 1} / {phrases.length}</Text>
+        <View style={styles.progressRight}>
+          {current.isAI && (
+            <View style={styles.aiCardBadge}>
+              <Ionicons name="sparkles" size={10} color="#F59E0B" />
+              <Text style={styles.aiCardBadgeText}>AI</Text>
+            </View>
+          )}
+          <Text style={styles.progressText}>{currentIndex + 1} / {displayPhrases.length}</Text>
+        </View>
       </View>
 
       {/* カード */}
-      <LinearGradient colors={['#1E293B', '#2D3748']} style={styles.phraseCard} start={{x:0,y:0}} end={{x:1,y:1}}>
+      <LinearGradient
+        colors={current.isAI ? ['#1C1A2E', '#2D1F3D'] : ['#1E293B', '#2D3748']}
+        style={styles.phraseCard}
+        start={{x:0,y:0}} end={{x:1,y:1}}
+      >
         <View style={styles.phraseCardBadge}>
-          <Ionicons name="pricetag" size={12} color={Colors.primaryLight} />
-          <Text style={styles.phraseCardBadgeText}>{current.category_name}</Text>
+          <Ionicons
+            name={current.isAI ? 'sparkles' : 'pricetag'}
+            size={12}
+            color={current.isAI ? '#F59E0B' : Colors.primaryLight}
+          />
+          <Text style={[styles.phraseCardBadgeText, current.isAI && { color: '#F59E0B' }]}>
+            {current.category_name || 'フレーズ'}
+          </Text>
         </View>
 
-        {/* メインテキスト（常に表示） */}
         <Text style={isJaFirst ? styles.phraseJaMain : styles.phraseEnglish}>{mainText}</Text>
 
-        {/* 発音ヒント（英語が主表示のときのみ） */}
         {!isJaFirst && current.pronunciation_hint && (
           <View style={styles.hintRow}>
             <Ionicons name="volume-medium" size={14} color={Colors.textSecondary} />
@@ -260,7 +456,6 @@ function PhrasesTab({ phrases, currentIndex, showJapanese, speakingId, flipMode,
           </View>
         )}
 
-        {/* サブテキスト（タップで表示） */}
         <TouchableOpacity onPress={onToggleJapanese} style={styles.translateButton} activeOpacity={0.8}>
           {showJapanese ? (
             <Text style={isJaFirst ? styles.phraseEnglish : styles.phraseJapanese}>{subText}</Text>
@@ -280,25 +475,195 @@ function PhrasesTab({ phrases, currentIndex, showJapanese, speakingId, flipMode,
         )}
 
         <TouchableOpacity
-          style={[styles.speakButton, speakingId === current.id && styles.speakButtonActive]}
+          style={[styles.speakButton, isSpeaking && styles.speakButtonActive, current.isAI && styles.speakButtonAI]}
           onPress={() => onSpeak(current)}
           activeOpacity={0.85}
         >
-          <Ionicons name={speakingId === current.id ? 'volume-high' : 'volume-medium-outline'} size={22} color="#fff" />
+          <Ionicons name={isSpeaking ? 'volume-high' : 'volume-medium-outline'} size={22} color="#fff" />
           <Text style={styles.speakButtonText}>
-            {speakingId === current.id ? '再生中...' : '発音を聞く'}
+            {isSpeaking ? '再生中...' : '発音を聞く'}
           </Text>
         </TouchableOpacity>
       </LinearGradient>
 
       <View style={styles.navButtons}>
         <Button title="← 前へ" onPress={onPrev} variant="outline" disabled={currentIndex === 0} style={styles.navBtn} />
-        <Button title="次へ →" onPress={onNext} disabled={currentIndex === phrases.length - 1} style={styles.navBtn} />
+        {currentIndex < displayPhrases.length - 1 ? (
+          <Button title="次へ →" onPress={onNext} style={styles.navBtn} />
+        ) : (
+          /* 最後のカード: 次のセットを生成するボタン */
+          <TouchableOpacity
+            onPress={!limitReached && !aiLoading ? onReloadAI : undefined}
+            disabled={limitReached || aiLoading}
+            style={[styles.nextSetBtn, (limitReached || aiLoading) && styles.nextSetBtnDisabled]}
+            activeOpacity={0.85}
+          >
+            <LinearGradient
+              colors={limitReached || aiLoading ? ['#334155', '#334155'] : ['#8B5CF6', '#4F46E5']}
+              style={styles.nextSetBtnGradient}
+              start={{x:0,y:0}} end={{x:1,y:0}}
+            >
+              <Ionicons
+                name={aiLoading ? 'hourglass-outline' : limitReached ? 'ban-outline' : 'sparkles'}
+                size={16}
+                color={limitReached || aiLoading ? Colors.textMuted : '#fff'}
+              />
+              <Text style={[styles.nextSetBtnText, (limitReached || aiLoading) && { color: Colors.textMuted }]}>
+                {aiLoading ? '生成中...' : limitReached ? '本日は終了' : '次のフレーズを確認'}
+              </Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        )}
       </View>
+
+      {/* ── AI今日のフレーズ セクション ── */}
+      <View style={styles.aiSection}>
+        <View style={styles.aiSectionHeader}>
+          <View style={styles.aiSectionTitleRow}>
+            <View style={styles.aiSparkWrap}>
+              <Ionicons name="sparkles" size={15} color="#F59E0B" />
+            </View>
+            <Text style={styles.aiSectionTitle}>AI今日のフレーズ</Text>
+          </View>
+
+          {/* 残り回数 + 再生成ボタン */}
+          <View style={styles.aiHeaderRight}>
+            {remainingToday !== null && (
+              <View style={[styles.remainingBadge, { backgroundColor: remainingColor + '20', borderColor: remainingColor + '50' }]}>
+                <Ionicons name="refresh-circle" size={12} color={remainingColor} />
+                <Text style={[styles.remainingText, { color: remainingColor }]}>
+                  残り{remainingToday}回
+                </Text>
+              </View>
+            )}
+            <TouchableOpacity
+              onPress={onReloadAI}
+              disabled={aiLoading || limitReached}
+              style={[styles.aiReloadBtn, (aiLoading || limitReached) && styles.aiReloadBtnDisabled]}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name={aiLoading ? 'hourglass-outline' : limitReached ? 'ban-outline' : 'refresh'}
+                size={14}
+                color={(aiLoading || limitReached) ? Colors.textMuted : Colors.primary}
+              />
+              <Text style={[styles.aiReloadText, (aiLoading || limitReached) && { color: Colors.textMuted }]}>
+                {aiLoading ? '生成中...' : limitReached ? '本日上限' : 'もう一度生成'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* 上限到達メッセージ */}
+        {limitReached && (
+          <View style={styles.limitBanner}>
+            <Ionicons name="moon" size={16} color={Colors.warning} />
+            <Text style={styles.limitBannerText}>
+              本日の生成上限（{dailyLimit}回）に達しました。明日また挑戦してください！
+            </Text>
+          </View>
+        )}
+
+        {aiLoading ? (
+          <View style={styles.aiLoadingWrap}>
+            <ActivityIndicator size="small" color={Colors.primary} />
+            <Text style={styles.aiLoadingText}>AIがフレーズを生成しています...</Text>
+          </View>
+        ) : aiPhrases.length === 0 ? (
+          <View style={styles.aiEmptyWrap}>
+            <Ionicons name="cloud-offline-outline" size={32} color={Colors.textMuted} />
+            <Text style={styles.aiEmptyText}>フレーズを取得できませんでした</Text>
+            {!limitReached && (
+              <TouchableOpacity onPress={onReloadAI} style={styles.aiRetryBtn}>
+                <Text style={styles.aiRetryText}>再試行</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ) : (
+          <View style={styles.aiPhrasesList}>
+            {aiPhrases.map((phrase: AIPhrase, idx: number) => (
+              <View key={phrase.hash} style={styles.aiPhraseCard}>
+                <View style={styles.aiPhraseCardTop}>
+                  <View style={styles.aiPhraseIndexBadge}>
+                    <Text style={styles.aiPhraseIndexText}>{idx + 1}</Text>
+                  </View>
+                  <View style={styles.aiCategoryBadge}>
+                    <Ionicons name="pricetag-outline" size={10} color={Colors.primaryLight} />
+                    <Text style={styles.aiCategoryText}>{phrase.category_label}</Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => onSpeakAI(phrase)}
+                    style={[styles.aiSpeakBtn, speakingHash === phrase.hash && styles.aiSpeakBtnActive]}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons
+                      name={speakingHash === phrase.hash ? 'volume-high' : 'volume-medium-outline'}
+                      size={18}
+                      color={speakingHash === phrase.hash ? '#fff' : Colors.primary}
+                    />
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.aiPhraseEnglish}>{phrase.english}</Text>
+                {phrase.pronunciation_hint ? (
+                  <View style={styles.aiHintRow}>
+                    <Ionicons name="musical-notes-outline" size={12} color={Colors.textMuted} />
+                    <Text style={styles.aiHintText}>{phrase.pronunciation_hint}</Text>
+                  </View>
+                ) : null}
+                <Text style={styles.aiPhraseJapanese}>{phrase.japanese}</Text>
+                {phrase.example_context ? (
+                  <View style={styles.aiExampleRow}>
+                    <Ionicons name="bulb-outline" size={12} color={Colors.warning} />
+                    <Text style={styles.aiExampleText}>{phrase.example_context}</Text>
+                  </View>
+                ) : null}
+              </View>
+            ))}
+          </View>
+        )}
+      </View>
+
+      {/* ── 今日確認したフレーズ ── */}
+      {reviewedToday.length > 0 && (
+        <View style={styles.reviewedSection}>
+          <View style={styles.reviewedHeader}>
+            <View style={styles.reviewedIconWrap}>
+              <Ionicons name="checkmark-done" size={15} color={Colors.success} />
+            </View>
+            <Text style={styles.reviewedTitle}>今日確認したフレーズ</Text>
+            <View style={styles.reviewedCountBadge}>
+              <Text style={styles.reviewedCountText}>{reviewedToday.length}</Text>
+            </View>
+          </View>
+          <View style={styles.reviewedList}>
+            {reviewedToday.map((p: DisplayPhrase, idx: number) => (
+              <View key={p.hash ?? p.id?.toString() ?? idx} style={styles.reviewedItem}>
+                <View style={styles.reviewedItemLeft}>
+                  {p.isAI && (
+                    <View style={styles.reviewedAIBadge}>
+                      <Ionicons name="sparkles" size={8} color="#F59E0B" />
+                    </View>
+                  )}
+                  <View style={styles.reviewedTexts}>
+                    <Text style={styles.reviewedEnglish}>{p.english}</Text>
+                    <Text style={styles.reviewedJapanese}>{p.japanese}</Text>
+                  </View>
+                </View>
+                <View style={[styles.reviewedCheck, { backgroundColor: Colors.success + '20' }]}>
+                  <Ionicons name="checkmark" size={14} color={Colors.success} />
+                </View>
+              </View>
+            ))}
+          </View>
+        </View>
+      )}
     </View>
   );
 }
 
+// ─────────────────────────────────────────────
+// AllPhrasesTab (単語タブ)
+// ─────────────────────────────────────────────
 function AllPhrasesTab({ phrases, onSpeak, speakingId }: any) {
   return (
     <View style={styles.allPhrasesTab}>
@@ -329,6 +694,9 @@ function AllPhrasesTab({ phrases, onSpeak, speakingId }: any) {
   );
 }
 
+// ─────────────────────────────────────────────
+// QuizTab
+// ─────────────────────────────────────────────
 function QuizTab({ questions, currentIndex, selectedAnswer, score, isDone, onAnswer, onRestart, onSwitchType, quizType }: any) {
   if (!questions?.length) {
     return (
@@ -426,6 +794,9 @@ function QuizTab({ questions, currentIndex, selectedAnswer, score, isDone, onAns
   );
 }
 
+// ─────────────────────────────────────────────
+// Styles
+// ─────────────────────────────────────────────
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
 
@@ -458,7 +829,7 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
 
-  /* Phrases */
+  /* Phrases Tab */
   phraseTab: { gap: Spacing.md },
   flipRow: { flexDirection: 'row', gap: Spacing.sm, alignSelf: 'center' },
   flipChip: {
@@ -470,11 +841,21 @@ const styles = StyleSheet.create({
   flipChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   flipChipText: { fontSize: FontSize.sm, color: Colors.textMuted, fontWeight: FontWeight.semibold },
   flipChipTextActive: { color: '#fff' },
-  phraseJaMain: { fontSize: FontSize.xxl, fontWeight: FontWeight.extrabold, color: Colors.textPrimary, lineHeight: 36 },
+
   progressRow: { gap: Spacing.xs },
+  progressRight: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 },
   progressBar: { height: 6, backgroundColor: Colors.backgroundCard, borderRadius: 3, overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: 3 },
-  progressText: { fontSize: FontSize.xs, color: Colors.textMuted, textAlign: 'right' },
+  progressText: { fontSize: FontSize.xs, color: Colors.textMuted },
+  aiCardBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: '#F59E0B20', borderRadius: BorderRadius.full,
+    paddingHorizontal: 6, paddingVertical: 2,
+    borderWidth: 1, borderColor: '#F59E0B40',
+  },
+  aiCardBadgeText: { fontSize: 9, fontWeight: FontWeight.bold, color: '#F59E0B' },
+
+  phraseJaMain: { fontSize: FontSize.xxl, fontWeight: FontWeight.extrabold, color: Colors.textPrimary, lineHeight: 36 },
   phraseCard: { borderRadius: BorderRadius.xl, padding: Spacing.xl, gap: Spacing.md },
   phraseCardBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
@@ -497,11 +878,172 @@ const styles = StyleSheet.create({
     padding: Spacing.md, justifyContent: 'center',
   },
   speakButtonActive: { backgroundColor: Colors.primaryDark },
+  speakButtonAI: { backgroundColor: '#8B5CF6' },
   speakButtonText: { color: '#fff', fontSize: FontSize.md, fontWeight: FontWeight.semibold },
   navButtons: { flexDirection: 'row', gap: Spacing.md },
   navBtn: { flex: 1 },
 
-  /* All phrases */
+  /* 次のフレーズを確認ボタン（最後のカード） */
+  nextSetBtn: { flex: 1, borderRadius: BorderRadius.lg, overflow: 'hidden' },
+  nextSetBtnDisabled: { opacity: 0.5 },
+  nextSetBtnGradient: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: Spacing.sm, paddingVertical: 13, paddingHorizontal: Spacing.md,
+    borderRadius: BorderRadius.lg,
+  },
+  nextSetBtnText: { color: '#fff', fontSize: FontSize.md, fontWeight: FontWeight.semibold },
+
+  /* AI初期ローディング画面 */
+  aiInitialLoading: {
+    alignItems: 'center', justifyContent: 'center',
+    paddingTop: 80, gap: Spacing.md,
+  },
+  aiInitialLoadingIcon: {
+    width: 80, height: 80, borderRadius: 24,
+    backgroundColor: '#F59E0B15',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: '#F59E0B30',
+  },
+  aiInitialLoadingTitle: {
+    fontSize: FontSize.lg, fontWeight: FontWeight.bold,
+    color: Colors.textPrimary, marginTop: Spacing.sm,
+  },
+  aiInitialLoadingDesc: {
+    fontSize: FontSize.sm, color: Colors.textSecondary,
+    textAlign: 'center', lineHeight: 20,
+  },
+
+  /* AI Section */
+  aiSection: { marginTop: Spacing.xl, gap: Spacing.md },
+  aiSectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  aiSectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  aiHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  aiSparkWrap: {
+    width: 28, height: 28, borderRadius: 8,
+    backgroundColor: '#F59E0B20',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  aiSectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  aiNewBadge: {
+    backgroundColor: Colors.primary, borderRadius: BorderRadius.full,
+    paddingHorizontal: 7, paddingVertical: 2,
+  },
+  aiNewBadgeText: { fontSize: 9, fontWeight: FontWeight.bold, color: '#fff', letterSpacing: 0.5 },
+
+  /* 残り回数バッジ */
+  remainingBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    borderRadius: BorderRadius.full,
+    paddingHorizontal: 8, paddingVertical: 4,
+    borderWidth: 1,
+  },
+  remainingText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
+
+  aiReloadBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: Colors.primary + '15',
+    borderRadius: BorderRadius.full,
+    paddingHorizontal: Spacing.md, paddingVertical: 6,
+    borderWidth: 1, borderColor: Colors.primary + '40',
+  },
+  aiReloadBtnDisabled: { backgroundColor: Colors.backgroundCard, borderColor: Colors.border },
+  aiReloadText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.primary },
+
+  /* 上限バナー */
+  limitBanner: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 8,
+    backgroundColor: Colors.warning + '15',
+    borderRadius: BorderRadius.md,
+    padding: Spacing.md,
+    borderWidth: 1, borderColor: Colors.warning + '40',
+  },
+  limitBannerText: { flex: 1, fontSize: FontSize.sm, color: Colors.warning, lineHeight: 20 },
+
+  aiLoadingWrap: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.xl },
+  aiLoadingText: { fontSize: FontSize.sm, color: Colors.textMuted },
+  aiEmptyWrap: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.xl },
+  aiEmptyText: { fontSize: FontSize.sm, color: Colors.textMuted },
+  aiRetryBtn: {
+    backgroundColor: Colors.primary + '20', borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
+  },
+  aiRetryText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold },
+  aiPhrasesList: { gap: Spacing.sm },
+  aiPhraseCard: {
+    backgroundColor: Colors.backgroundCard,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.md,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  aiPhraseCardTop: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  aiPhraseIndexBadge: {
+    width: 22, height: 22, borderRadius: 6,
+    backgroundColor: Colors.primary + '25',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  aiPhraseIndexText: { fontSize: 11, fontWeight: FontWeight.bold, color: Colors.primary },
+  aiCategoryBadge: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: '#4F46E520', borderRadius: BorderRadius.full,
+    paddingHorizontal: 8, paddingVertical: 3, alignSelf: 'flex-start',
+  },
+  aiCategoryText: { fontSize: FontSize.xs, color: Colors.primaryLight, fontWeight: FontWeight.semibold },
+  aiSpeakBtn: {
+    width: 34, height: 34, borderRadius: 10,
+    backgroundColor: Colors.primary + '15',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: Colors.primary + '30',
+  },
+  aiSpeakBtnActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  aiPhraseEnglish: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, lineHeight: 26 },
+  aiHintRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  aiHintText: { fontSize: FontSize.xs, color: Colors.textMuted, fontStyle: 'italic' },
+  aiPhraseJapanese: { fontSize: FontSize.md, color: Colors.textSecondary },
+  aiExampleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 5 },
+  aiExampleText: { flex: 1, fontSize: FontSize.xs, color: Colors.textMuted, fontStyle: 'italic', lineHeight: 18 },
+
+  /* 今日確認したフレーズ */
+  reviewedSection: { marginTop: Spacing.xl, gap: Spacing.md },
+  reviewedHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  reviewedIconWrap: {
+    width: 28, height: 28, borderRadius: 8,
+    backgroundColor: Colors.success + '20',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  reviewedTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary, flex: 1 },
+  reviewedCountBadge: {
+    minWidth: 22, height: 22, borderRadius: 11,
+    backgroundColor: Colors.success,
+    alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  reviewedCountText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, color: '#fff' },
+  reviewedList: { gap: Spacing.sm },
+  reviewedItem: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: Colors.backgroundCard,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.md,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  reviewedItemLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  reviewedAIBadge: {
+    width: 18, height: 18, borderRadius: 5,
+    backgroundColor: '#F59E0B20',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: '#F59E0B40',
+  },
+  reviewedTexts: { flex: 1, gap: 2 },
+  reviewedEnglish: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  reviewedJapanese: { fontSize: FontSize.xs, color: Colors.textSecondary },
+  reviewedCheck: {
+    width: 28, height: 28, borderRadius: 8,
+    alignItems: 'center', justifyContent: 'center',
+  },
+
+  /* All phrases tab */
   allPhrasesTab: { gap: Spacing.sm },
   phraseListCard: {},
   phraseListRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },

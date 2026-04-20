@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, KeyboardAvoidingView, Platform,
-  Alert, ActivityIndicator, Animated, Pressable
+  Alert, ActivityIndicator, Animated, Pressable, Linking
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -19,7 +19,7 @@ import { Button } from '../../components/ui/Button';
 import { Colors, FontSize, FontWeight, Spacing, BorderRadius, AVATARS, TOPICS } from '../../constants/theme';
 import { Message, Correction } from '../../types';
 
-type Mode = 'setup' | 'loading' | 'chat' | 'summary';
+type Mode = 'setup' | 'loading' | 'chat' | 'ending' | 'summary';
 
 /** 1セッションあたりの最大ユーザーターン数 */
 const MAX_TURNS = 10;
@@ -50,28 +50,75 @@ export default function ConversationScreen() {
   const [userTurnCount, setUserTurnCount] = useState(0);
 
   /** 音声認識中・完了後にinputの上に表示するテキスト */
-  const [transcribeStatus, setTranscribeStatus] = useState<'idle' | 'listening' | 'processing'>('idle');
+  const [transcribeStatus, setTranscribeStatus] = useState<'idle' | 'listening' | 'processing' | 'recognized'>('idle');
+  /** 認識されたテキストを一時保持（即時表示用） */
+  const [recognizedText, setRecognizedText] = useState('');
+
+  /** マイク権限の状態 */
+  const [micPermission, setMicPermission] = useState<'unknown' | 'granted' | 'denied'>('unknown');
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const recordingAnim = useRef(new Animated.Value(1)).current;
   const pulseAnim = useRef(new Animated.Value(0)).current;
+  // AI発言中の波形アニメーション用
+  const speakingBar1 = useRef(new Animated.Value(0.3)).current;
+  const speakingBar2 = useRef(new Animated.Value(0.7)).current;
+  const speakingBar3 = useRef(new Animated.Value(0.5)).current;
+  const speakingBar4 = useRef(new Animated.Value(0.8)).current;
 
   const suggestions = ["Tell me more!", "I see.", "That's interesting!", "Could you explain?", "I agree!"];
 
   useEffect(() => {
     if (params.topic) setTopic(params.topic);
+    // マウント時にマイク権限を事前チェック
+    checkMicPermission();
     return () => {
       timerRef.current && clearInterval(timerRef.current);
       sound?.unloadAsync();
     };
   }, []);
 
+  const checkMicPermission = async () => {
+    try {
+      const { status } = await Audio.getPermissionsAsync();
+      if (status === 'granted') {
+        setMicPermission('granted');
+      } else if (status === 'denied') {
+        setMicPermission('denied');
+      } else {
+        // undetermined → まだリクエストしていない
+        setMicPermission('unknown');
+      }
+    } catch {
+      setMicPermission('denied');
+    }
+  };
+
   useEffect(() => {
     if (mode === 'chat') {
       timerRef.current = setInterval(() => setElapsedTime(t => t + 1), 1000);
     } else {
       timerRef.current && clearInterval(timerRef.current);
+    }
+
+    // ending中はスケルトンのパルスアニメーションを動かす
+    if (mode === 'ending') {
+      const pulse = Animated.loop(
+        Animated.sequence([
+          Animated.timing(recordingAnim, { toValue: 1.1, duration: 700, useNativeDriver: true }),
+          Animated.timing(recordingAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
+        ])
+      );
+      const glow = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1, duration: 900, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 0, duration: 900, useNativeDriver: true }),
+        ])
+      );
+      pulse.start();
+      glow.start();
+      return () => { pulse.stop(); glow.stop(); };
     }
   }, [mode]);
 
@@ -99,6 +146,30 @@ export default function ConversationScreen() {
     }
   }, [isRecording]);
 
+  // AI発言中の波形アニメーション
+  useEffect(() => {
+    if (isSpeaking) {
+      const makeBar = (anim: Animated.Value, duration: number) =>
+        Animated.loop(
+          Animated.sequence([
+            Animated.timing(anim, { toValue: 1, duration, useNativeDriver: true }),
+            Animated.timing(anim, { toValue: 0.2, duration, useNativeDriver: true }),
+          ])
+        );
+      const b1 = makeBar(speakingBar1, 350);
+      const b2 = makeBar(speakingBar2, 280);
+      const b3 = makeBar(speakingBar3, 420);
+      const b4 = makeBar(speakingBar4, 310);
+      b1.start(); b2.start(); b3.start(); b4.start();
+      return () => { b1.stop(); b2.stop(); b3.stop(); b4.stop(); };
+    } else {
+      speakingBar1.setValue(0.3);
+      speakingBar2.setValue(0.7);
+      speakingBar3.setValue(0.5);
+      speakingBar4.setValue(0.8);
+    }
+  }, [isSpeaking]);
+
   const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
 
   const remainingTurns = MAX_TURNS - userTurnCount;
@@ -109,6 +180,7 @@ export default function ConversationScreen() {
   const startSession = async () => {
     resetSession();
     setUserTurnCount(0);
+    setElapsedTime(0); // ← タイマーをリセット
     setTopic(topic);
     setMode('loading'); // ローディング画面へ
     try {
@@ -119,7 +191,7 @@ export default function ConversationScreen() {
         setMode('setup');
         Alert.alert(
           '今月の上限に達しました 😢',
-          `今月は${(result as any).monthly_limit}回の会話を使い切りました。\nプレミアムプランで100回/月に拡張できます。`,
+          `今月の会話セッション上限（${(result as any).monthly_limit}回）をすべて使いました。\nプレミアムプランで月100セッション（1セッション最大10往復）に拡張できます。`,
           [{ text: 'OK' }]
         );
         return;
@@ -134,7 +206,7 @@ export default function ConversationScreen() {
       if (e?.response?.status === 402) {
         Alert.alert(
           '今月の上限に達しました 😢',
-          'プレミアムプランにアップグレードすると月100回まで会話できます。',
+          'プレミアムプランにアップグレードすると月100セッション（1セッション最大10往復）まで会話できます。',
           [{ text: 'OK' }]
         );
       } else {
@@ -197,8 +269,16 @@ export default function ConversationScreen() {
         // 残り3回になったタイミングでハプティクス
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       }
-    } catch {
-      Alert.alert('エラー', 'メッセージの送信に失敗しました');
+    } catch (e: any) {
+      if (e?.response?.data?.error === 'session_turn_limit_reached') {
+        Alert.alert(
+          'セッション終了',
+          `このセッションの発言上限（${MAX_TURNS}回）に達しました。`,
+          [{ text: '結果を見る', onPress: () => endSession(true) }]
+        );
+      } else {
+        Alert.alert('エラー', 'メッセージの送信に失敗しました');
+      }
     } finally {
       setLoading(false);
     }
@@ -207,7 +287,14 @@ export default function ConversationScreen() {
   const playAIResponse = async (text: string) => {
     try {
       setIsSpeaking(true);
-      const audioBase64 = await conversationService.synthesizeSpeech(text);
+      // アバターのアクセントに合わせた声を使う（デフォルトはEmmaのnova）
+      const voiceMap: Record<string, string> = {
+        'American': 'nova',    // Emma
+        'British': 'onyx',     // James
+        'Australian': 'shimmer', // Lily
+      };
+      const voice = voiceMap[avatarAccent] ?? 'nova';
+      const audioBase64 = await conversationService.synthesizeSpeech(text, voice);
       await playBase64Audio(audioBase64);
     } catch { setIsSpeaking(false); }
   };
@@ -216,6 +303,12 @@ export default function ConversationScreen() {
     try {
       if (sound) await sound.unloadAsync();
       setIsSpeaking(true);
+      // 消音モード(サイレントモード)でも再生できるよう設定
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+      });
       const { sound: newSound } = await Audio.Sound.createAsync(
         { uri: `data:audio/mp3;base64,${base64}` },
         { shouldPlay: true }
@@ -230,18 +323,66 @@ export default function ConversationScreen() {
   // ─── 録音開始（長押し開始） ───
   const startRecording = async () => {
     if (isLoading || isSpeaking || isAtLimit) return;
+
+    // 既に拒否済みの場合は設定アプリへ誘導
+    if (micPermission === 'denied') {
+      Alert.alert(
+        'マイクの権限が必要です',
+        '設定アプリでマイクの使用を許可してください。テキスト入力でも会話できます。',
+        [
+          { text: 'キャンセル', style: 'cancel' },
+          { text: '設定を開く', onPress: () => Linking.openSettings() },
+        ]
+      );
+      return;
+    }
+
+    // ── UIを即座に録音中に切り替え（async処理を待たずに反映）──
+    setIsRecording(true);
+    setTranscribeStatus('listening');
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
     try {
-      const { granted } = await Audio.requestPermissionsAsync();
-      if (!granted) { Alert.alert('権限が必要です', 'マイクの使用を許可してください'); return; }
+      const { granted, canAskAgain } = await Audio.requestPermissionsAsync();
+      if (!granted) {
+        // 権限なし → UIを元に戻してアラート
+        setIsRecording(false);
+        setTranscribeStatus('idle');
+        setMicPermission('denied');
+        if (!canAskAgain) {
+          Alert.alert(
+            'マイクの権限が必要です',
+            '設定アプリでマイクの使用を許可してください。テキスト入力でも会話できます。',
+            [
+              { text: 'キャンセル', style: 'cancel' },
+              { text: '設定を開く', onPress: () => Linking.openSettings() },
+            ]
+          );
+        } else {
+          Alert.alert('権限が必要です', 'マイクの使用を許可してください。テキスト入力でも会話できます。');
+        }
+        return;
+      }
+      setMicPermission('granted');
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
       const { recording: rec } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
       setRecording(rec);
-      setIsRecording(true);
-      setTranscribeStatus('listening');
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    } catch { Alert.alert('エラー', '録音を開始できませんでした'); }
+    } catch (e: any) {
+      // 失敗したらUIを元に戻す
+      setIsRecording(false);
+      setTranscribeStatus('idle');
+      const isSimulator = e?.message?.includes('simulator') || e?.message?.includes('Simulator');
+      if (isSimulator) {
+        Alert.alert(
+          'シミュレーターではマイクを使用できません',
+          'テキスト入力で会話してください。実機ではマイクが利用できます。'
+        );
+      } else {
+        Alert.alert('録音を開始できませんでした', 'テキスト入力でも会話できます。');
+      }
+    }
   };
 
   // ─── 録音停止（長押し解放）→ 文字認識して自動送信 ───
@@ -257,27 +398,33 @@ export default function ConversationScreen() {
       if (uri) {
         const transcribed = await conversationService.transcribeAudio(uri);
         if (transcribed) {
-          setTranscribeStatus('idle');
-          await sendMessage(transcribed); // ← 認識後に自動送信
+          // 認識テキストを即座に表示してから送信
+          setRecognizedText(transcribed);
+          setTranscribeStatus('recognized');
+          await sendMessage(transcribed);
         }
       }
     } catch { Alert.alert('エラー', '音声認識に失敗しました'); }
-    finally { setTranscribeStatus('idle'); }
+    finally {
+      setTranscribeStatus('idle');
+      setRecognizedText('');
+    }
   };
 
   // ─── セッション終了 ───
   const endSession = async (auto = false) => {
     if (!sessionId) return;
     const doEnd = async () => {
-      setLoading(true);
+      setMode('ending'); // ← ローディング画面へ即座に切り替え
       try {
         const result = await conversationService.endSession(sessionId);
         setSummaryLocal(result.summary);
         setSummary(result.summary);
         setMode('summary');
       } catch {
+        setMode('chat'); // 失敗したらチャット画面に戻す
         Alert.alert('エラー', '終了処理に失敗しました');
-      } finally { setLoading(false); }
+      }
     };
 
     if (auto) {
@@ -301,7 +448,7 @@ export default function ConversationScreen() {
   if (mode === 'loading') {
     const avatarInfo2 = AVATARS.find(a => a.name === avatarName) || AVATARS[0];
     return (
-      <SafeAreaView style={styles.safe}>
+      <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         <LinearGradient colors={['#0F172A', '#1E1B4B', '#0F172A']} style={styles.loadingScreen}>
           <Animated.View style={[styles.loadingAvatarWrap, { transform: [{ scale: recordingAnim }] }]}>
             <Text style={styles.loadingAvatarEmoji}>{avatarInfo2.emoji}</Text>
@@ -322,10 +469,52 @@ export default function ConversationScreen() {
     );
   }
 
+  // ============ ENDING SCREEN ============
+  if (mode === 'ending') {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+        <LinearGradient colors={['#0F172A', '#1E1B4B', '#0F172A']} style={styles.endingScreen}>
+          {/* トロフィー */}
+          <Animated.View style={[styles.endingIconWrap, { transform: [{ scale: recordingAnim }] }]}>
+            <Ionicons name="trophy" size={44} color={Colors.gold} />
+          </Animated.View>
+          <Text style={styles.loadingTitle}>結果を集計中...</Text>
+          <Text style={styles.loadingSubtitle}>会話の内容を分析しています</Text>
+
+          {/* スコア項目スケルトン（2×2グリッド） */}
+          <View style={styles.endingSkeletonGrid}>
+            {[
+              { label: '総合', color: Colors.primary },
+              { label: '流暢さ', color: Colors.info },
+              { label: '正確さ', color: Colors.success },
+              { label: '語彙', color: Colors.secondary },
+            ].map((item, i) => (
+              <Animated.View
+                key={i}
+                style={[styles.endingSkeletonCard, {
+                  opacity: pulseAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.25, 0.65],
+                  }),
+                }]}
+              >
+                <View style={[styles.endingSkeletonIcon, { backgroundColor: item.color + '40' }]} />
+                <View style={[styles.endingSkeletonScore, { backgroundColor: item.color + '30' }]} />
+                <Text style={styles.endingSkeletonLabel}>{item.label}</Text>
+              </Animated.View>
+            ))}
+          </View>
+
+          <ActivityIndicator size="small" color={Colors.primaryLight} style={{ marginTop: Spacing.lg }} />
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
+
   // ============ SETUP SCREEN ============
   if (mode === 'setup') {
     return (
-      <SafeAreaView style={styles.safe}>
+      <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         <ScrollView contentContainerStyle={styles.setupContent}>
           <Text style={styles.setupTitle}>会話の設定</Text>
 
@@ -363,11 +552,15 @@ export default function ConversationScreen() {
             </View>
           </View>
 
-          {/* ターン数説明 */}
+          {/* セッション説明 */}
           <View style={styles.turnInfoCard}>
             <Ionicons name="information-circle" size={18} color={Colors.info} />
             <Text style={styles.turnInfoText}>
-              1セッション最大 <Text style={{ color: Colors.primary, fontWeight: FontWeight.bold }}>{MAX_TURNS}回</Text> のやり取りができます
+              1セッション最大{' '}
+              <Text style={{ color: Colors.primary, fontWeight: FontWeight.bold }}>{MAX_TURNS}往復</Text>
+              {' '}できます。月の上限は{' '}
+              <Text style={{ color: Colors.primary, fontWeight: FontWeight.bold }}>100セッション</Text>
+              （プレミアム）です
             </Text>
           </View>
 
@@ -387,86 +580,110 @@ export default function ConversationScreen() {
   // ============ SUMMARY SCREEN ============
   if (mode === 'summary' && summary) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <ScrollView contentContainerStyle={styles.summaryContent}>
-          <View style={styles.summaryHero}>
-            <View style={styles.summaryTrophyWrap}>
-              <Ionicons name="trophy" size={48} color={Colors.gold} />
-            </View>
-            <Text style={styles.summaryTitle}>会話完了！</Text>
-            <Text style={styles.summaryTurns}>{userTurnCount}回のやり取りを達成</Text>
-          </View>
-
-          <View style={styles.scoreGrid}>
-            {[
-              { label: '総合', score: summary.overall_score, color: Colors.primary, icon: 'star' as const },
-              { label: '流暢さ', score: summary.fluency_score, color: Colors.info, icon: 'chatbubbles' as const },
-              { label: '正確さ', score: summary.accuracy_score, color: Colors.success, icon: 'checkmark-circle' as const },
-              { label: '語彙', score: summary.vocabulary_score, color: Colors.secondary, icon: 'book' as const },
-            ].map((s, i) => (
-              <View key={i} style={styles.scoreCard}>
-                <Ionicons name={s.icon} size={20} color={s.color} />
-                <Text style={[styles.scoreValue, { color: s.color }]}>{s.score}</Text>
-                <Text style={styles.scoreLabel}>{s.label}</Text>
+      <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+        <View style={styles.summaryContainer}>
+          <ScrollView contentContainerStyle={styles.summaryContent}>
+            <View style={styles.summaryHero}>
+              <View style={styles.summaryTrophyWrap}>
+                <Ionicons name="trophy" size={48} color={Colors.gold} />
               </View>
-            ))}
-          </View>
-
-          <View style={styles.summarySection}>
-            <View style={styles.summarySectionHeader}>
-              <Ionicons name="document-text" size={16} color={Colors.primary} />
-              <Text style={styles.summarySectionTitle}>会話の要約</Text>
+              <Text style={styles.summaryTitle}>会話完了！</Text>
+              <Text style={styles.summaryTurns}>{userTurnCount}回のやり取りを達成</Text>
             </View>
-            <Text style={styles.summaryText}>{summary.summary_ja}</Text>
-          </View>
 
-          {summary.strong_points_ja?.length > 0 && (
-            <View style={styles.summarySection}>
-              <View style={styles.summarySectionHeader}>
-                <Ionicons name="checkmark-circle" size={16} color={Colors.success} />
-                <Text style={styles.summarySectionTitle}>良かった点</Text>
-              </View>
-              {summary.strong_points_ja.map((p: string, i: number) => (
-                <View key={i} style={styles.bulletRow}>
-                  <Ionicons name="chevron-forward" size={14} color={Colors.success} />
-                  <Text style={styles.bulletItem}>{p}</Text>
+            <View style={styles.scoreGrid}>
+              {[
+                { label: '総合', score: summary.overall_score, color: Colors.primary, icon: 'star' as const },
+                { label: '流暢さ', score: summary.fluency_score, color: Colors.info, icon: 'chatbubbles' as const },
+                { label: '正確さ', score: summary.accuracy_score, color: Colors.success, icon: 'checkmark-circle' as const },
+                { label: '語彙', score: summary.vocabulary_score, color: Colors.secondary, icon: 'book' as const },
+              ].map((s, i) => (
+                <View key={i} style={styles.scoreCard}>
+                  <Ionicons name={s.icon} size={20} color={s.color} />
+                  <Text style={[styles.scoreValue, { color: s.color }]}>{s.score}</Text>
+                  <Text style={styles.scoreLabel}>{s.label}</Text>
                 </View>
               ))}
             </View>
-          )}
 
-          {summary.improvement_areas_ja?.length > 0 && (
             <View style={styles.summarySection}>
               <View style={styles.summarySectionHeader}>
-                <Ionicons name="fitness" size={16} color={Colors.warning} />
-                <Text style={styles.summarySectionTitle}>改善点</Text>
+                <Ionicons name="document-text" size={16} color={Colors.primary} />
+                <Text style={styles.summarySectionTitle}>会話の要約</Text>
               </View>
-              {summary.improvement_areas_ja.map((p: string, i: number) => (
-                <View key={i} style={styles.bulletRow}>
-                  <Ionicons name="chevron-forward" size={14} color={Colors.warning} />
-                  <Text style={styles.bulletItem}>{p}</Text>
-                </View>
-              ))}
+              <Text style={styles.summaryText}>{summary.summary_ja}</Text>
             </View>
-          )}
 
-          <View style={styles.encouragementCard}>
-            <Ionicons name="heart" size={18} color={Colors.primary} />
-            <Text style={styles.encouragementText}>{summary.encouragement_ja}</Text>
-          </View>
+            {summary.strong_points_ja?.length > 0 && (
+              <View style={styles.summarySection}>
+                <View style={styles.summarySectionHeader}>
+                  <Ionicons name="checkmark-circle" size={16} color={Colors.success} />
+                  <Text style={styles.summarySectionTitle}>良かった点</Text>
+                </View>
+                {summary.strong_points_ja.map((p: string, i: number) => (
+                  <View key={i} style={styles.bulletRow}>
+                    <Ionicons name="chevron-forward" size={14} color={Colors.success} />
+                    <Text style={styles.bulletItem}>{p}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
 
-          <View style={styles.summaryActions}>
-            <Button title="もう一度会話" onPress={() => { resetSession(); setMode('setup'); }} fullWidth />
-            <Button title="単語帳を見る" onPress={() => router.push('/(main)/vocabulary')} variant="outline" fullWidth />
+            {summary.improvement_areas_ja?.length > 0 && (
+              <View style={styles.summarySection}>
+                <View style={styles.summarySectionHeader}>
+                  <Ionicons name="fitness" size={16} color={Colors.warning} />
+                  <Text style={styles.summarySectionTitle}>改善点</Text>
+                </View>
+                {summary.improvement_areas_ja.map((p: string, i: number) => (
+                  <View key={i} style={styles.bulletRow}>
+                    <Ionicons name="chevron-forward" size={14} color={Colors.warning} />
+                    <Text style={styles.bulletItem}>{p}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            <View style={styles.encouragementCard}>
+              <Ionicons name="heart" size={18} color={Colors.primary} />
+              <Text style={styles.encouragementText}>{summary.encouragement_ja}</Text>
+            </View>
+
+          </ScrollView>
+
+          {/* ── 固定アクションボタン（ScrollViewの下・タブバーのすぐ上） ── */}
+          <View style={styles.summaryFloatingActions}>
+            <TouchableOpacity
+              style={styles.summaryPrimaryBtn}
+              onPress={() => { resetSession(); setMode('setup'); }}
+              activeOpacity={0.85}
+            >
+              <LinearGradient
+                colors={[Colors.primary, Colors.gradientEnd]}
+                style={styles.summaryPrimaryBtnGradient}
+                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+              >
+                <Ionicons name="refresh" size={18} color="#fff" />
+                <Text style={styles.summaryPrimaryBtnText}>もう一度会話</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.summarySecondaryBtn}
+              onPress={() => router.push('/(main)/vocabulary')}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="library-outline" size={18} color={Colors.primaryLight} />
+              <Text style={styles.summarySecondaryBtnText}>単語帳を見る</Text>
+            </TouchableOpacity>
           </View>
-        </ScrollView>
+        </View>
       </SafeAreaView>
     );
   }
 
   // ============ CHAT SCREEN ============
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
 
         {/* ── ヘッダー ── */}
@@ -566,12 +783,23 @@ export default function ConversationScreen() {
 
           {/* 音声認識ステータス表示 */}
           {transcribeStatus !== 'idle' && (
-            <View style={styles.transcribeStatus}>
+            <View style={[
+              styles.transcribeStatus,
+              transcribeStatus === 'recognized' && styles.transcribeStatusRecognized,
+            ]}>
               {transcribeStatus === 'listening' ? (
                 <>
                   <Animated.View style={[styles.recDot, { transform: [{ scale: recordingAnim }] }]} />
                   <Text style={styles.transcribeText}>話してください...</Text>
                   <Text style={styles.transcribeHint}>ボタンを離すと認識します</Text>
+                </>
+              ) : transcribeStatus === 'recognized' ? (
+                <>
+                  <Ionicons name="checkmark-circle" size={16} color={Colors.success} />
+                  <Text style={[styles.transcribeText, styles.transcribeTextRecognized]} numberOfLines={2}>
+                    {recognizedText}
+                  </Text>
+                  <ActivityIndicator size="small" color={Colors.primary} style={{ marginLeft: 4 }} />
                 </>
               ) : (
                 <>
@@ -603,42 +831,74 @@ export default function ConversationScreen() {
 
           {/* 長押しPush-to-Talk ボタン */}
           <View style={styles.voiceButtonContainer}>
-            <Animated.View style={[
-              styles.voiceButtonGlow,
-              {
-                opacity: pulseAnim,
-                transform: [{ scale: recordingAnim }],
-                backgroundColor: isRecording ? Colors.error + '40' : Colors.primary + '30',
-              }
-            ]} />
-            <Pressable
-              onPressIn={startRecording}
-              onPressOut={stopRecording}
-              disabled={isLoading || isAtLimit}
-              style={({ pressed }) => [styles.voiceButtonPressable]}
-            >
-              <LinearGradient
-                colors={
-                  isAtLimit ? [Colors.textMuted, Colors.textMuted] :
-                  isRecording ? [Colors.error, '#DC2626'] :
-                  [Colors.primary, Colors.gradientEnd]
-                }
-                style={styles.voiceButton}
-              >
-                <Ionicons
-                  name={isRecording ? 'stop' : 'mic'}
-                  size={30}
-                  color="#fff"
-                />
-              </LinearGradient>
-            </Pressable>
-            <Text style={[styles.voiceButtonLabel, isRecording && { color: Colors.error }]}>
-              {isAtLimit
-                ? '上限に達しました'
-                : isRecording
-                ? '離すと送信'
-                : '長押しで話す'}
-            </Text>
+            {micPermission === 'denied' ? (
+              /* マイク権限なし → 設定誘導バナー */
+              <TouchableOpacity style={styles.micDeniedBanner} onPress={() => Linking.openSettings()}>
+                <Ionicons name="mic-off" size={16} color={Colors.textMuted} />
+                <Text style={styles.micDeniedText}>マイク未許可 — テキスト入力で会話できます</Text>
+                <Text style={styles.micDeniedLink}>設定を開く</Text>
+              </TouchableOpacity>
+            ) : isSpeaking ? (
+              /* AI発言中 → 波形アニメーション付き待機ボタン */
+              <View style={styles.speakingContainer}>
+                <LinearGradient
+                  colors={[Colors.info + 'CC', Colors.secondary + 'CC']}
+                  style={styles.voiceButton}
+                >
+                  {/* 波形バー */}
+                  <View style={styles.waveformContainer}>
+                    {[speakingBar1, speakingBar2, speakingBar3, speakingBar4].map((bar, i) => (
+                      <Animated.View
+                        key={i}
+                        style={[styles.waveBar, { transform: [{ scaleY: bar }] }]}
+                      />
+                    ))}
+                  </View>
+                </LinearGradient>
+                <Text style={[styles.voiceButtonLabel, { color: Colors.info }]}>
+                  AIが話し中...
+                </Text>
+              </View>
+            ) : (
+              <>
+                <Animated.View style={[
+                  styles.voiceButtonGlow,
+                  {
+                    opacity: pulseAnim,
+                    transform: [{ scale: recordingAnim }],
+                    backgroundColor: isRecording ? Colors.error + '40' : Colors.primary + '30',
+                  }
+                ]} />
+                <Pressable
+                  onPressIn={startRecording}
+                  onPressOut={stopRecording}
+                  disabled={isLoading || isAtLimit}
+                  style={({ pressed }) => [styles.voiceButtonPressable]}
+                >
+                  <LinearGradient
+                    colors={
+                      isAtLimit ? [Colors.textMuted, Colors.textMuted] :
+                      isRecording ? [Colors.error, '#DC2626'] :
+                      [Colors.primary, Colors.gradientEnd]
+                    }
+                    style={styles.voiceButton}
+                  >
+                    <Ionicons
+                      name={isRecording ? 'stop' : 'mic'}
+                      size={30}
+                      color="#fff"
+                    />
+                  </LinearGradient>
+                </Pressable>
+                <Text style={[styles.voiceButtonLabel, isRecording && { color: Colors.error }]}>
+                  {isAtLimit
+                    ? '上限に達しました'
+                    : isRecording
+                    ? '離すと送信'
+                    : '長押しで話す'}
+                </Text>
+              </>
+            )}
           </View>
         </View>
       </KeyboardAvoidingView>
@@ -664,6 +924,40 @@ const styles = StyleSheet.create({
   loadingSubtitle: { fontSize: FontSize.md, color: Colors.textSecondary, textAlign: 'center' },
   loadingDots: { flexDirection: 'row', gap: Spacing.sm },
   loadingDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.primaryLight },
+
+  /* Ending */
+  endingScreen: {
+    flex: 1, alignItems: 'center', justifyContent: 'center',
+    padding: Spacing.xl, gap: Spacing.sm,
+  },
+  endingIconWrap: {
+    width: 80, height: 80, borderRadius: 40,
+    backgroundColor: Colors.gold + '20',
+    borderWidth: 2, borderColor: Colors.gold + '40',
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: Spacing.xs,
+  },
+  endingSkeletonGrid: {
+    flexDirection: 'row', flexWrap: 'wrap',
+    gap: Spacing.sm, marginTop: Spacing.lg,
+    width: '100%',
+  },
+  endingSkeletonCard: {
+    width: '47%',            // 2列グリッド
+    backgroundColor: Colors.backgroundCard,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.md,
+    alignItems: 'center', gap: 6,
+  },
+  endingSkeletonIcon: {
+    width: 24, height: 24, borderRadius: 12,
+  },
+  endingSkeletonScore: {
+    width: 40, height: 22, borderRadius: 6,
+  },
+  endingSkeletonLabel: {
+    fontSize: FontSize.xs, color: Colors.textMuted,
+  },
 
   /* Setup */
   setupContent: { padding: Spacing.lg, gap: Spacing.xl, paddingBottom: 100 },
@@ -779,6 +1073,8 @@ const styles = StyleSheet.create({
   },
   recDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.error },
   transcribeText: { flex: 1, fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  transcribeTextRecognized: { color: Colors.textPrimary, fontStyle: 'italic' },
+  transcribeStatusRecognized: { borderColor: Colors.success + '60', backgroundColor: Colors.success + '12' },
   transcribeHint: { fontSize: FontSize.xs, color: Colors.textMuted },
 
   inputRow: { flexDirection: 'row', gap: Spacing.sm, alignItems: 'flex-end' },
@@ -792,6 +1088,33 @@ const styles = StyleSheet.create({
   textInputActive: { borderColor: Colors.primary + '80' },
   sendButton: { width: 48, height: 48, borderRadius: 24, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
   sendButtonDisabled: { backgroundColor: Colors.textMuted },
+
+  /* AI発言中の波形ボタン */
+  speakingContainer: { alignItems: 'center', gap: 6 },
+  waveformContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    height: 30,
+  },
+  waveBar: {
+    width: 4,
+    height: 24,
+    borderRadius: 2,
+    backgroundColor: '#fff',
+  },
+
+  /* マイク権限なしバナー */
+  micDeniedBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: Colors.backgroundInput,
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  micDeniedText: { flex: 1, fontSize: FontSize.xs, color: Colors.textMuted },
+  micDeniedLink: { fontSize: FontSize.xs, color: Colors.primaryLight, fontWeight: FontWeight.semibold },
 
   /* Push-to-Talk ボタン */
   voiceButtonContainer: { alignItems: 'center', gap: 6 },
@@ -825,5 +1148,53 @@ const styles = StyleSheet.create({
   bulletItem: { flex: 1, fontSize: FontSize.md, color: Colors.textSecondary, lineHeight: 22 },
   encouragementCard: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm, backgroundColor: 'rgba(79,70,229,0.1)', borderRadius: BorderRadius.lg, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.primary + '30' },
   encouragementText: { flex: 1, fontSize: FontSize.md, color: Colors.primaryLight, lineHeight: 24 },
+  summaryContainer: { flex: 1 },
   summaryActions: { gap: Spacing.sm },
+
+  /* サマリー 固定アクションバー（flex配置・absoluteなし） */
+  summaryFloatingActions: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.md,
+    backgroundColor: Colors.backgroundSecondary,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  summaryPrimaryBtn: {
+    flex: 1,
+    borderRadius: BorderRadius.lg,
+  },
+  summaryPrimaryBtnGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    paddingVertical: 14,
+    borderRadius: BorderRadius.lg,
+    overflow: 'hidden',
+  },
+  summaryPrimaryBtnText: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.bold,
+    color: '#fff',
+  },
+  summarySecondaryBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    paddingVertical: 14,
+    borderRadius: BorderRadius.lg,
+    borderWidth: 1.5,
+    borderColor: Colors.primary + '60',
+    backgroundColor: Colors.primary + '10',
+  },
+  summarySecondaryBtnText: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.primaryLight,
+  },
 });

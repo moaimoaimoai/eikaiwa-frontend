@@ -48,7 +48,7 @@ export default function AnalysisScreen() {
   };
 
   if (loading) return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 80 }} />
     </SafeAreaView>
   );
@@ -63,7 +63,7 @@ export default function AnalysisScreen() {
   const maxMinutes = Math.max(...dailyActivity.map(d => d.minutes), 1);
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       {/* ── グラデーションヘッダー ── */}
       <LinearGradient colors={['#059669', '#4F46E5']} style={styles.header} start={{x:0,y:0}} end={{x:1,y:1}}>
         <View style={styles.headerTop}>

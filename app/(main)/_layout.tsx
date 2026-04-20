@@ -87,7 +87,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     height: 84,
     paddingBottom: 20,
-    paddingTop: 8,
+    paddingTop: 4,
   },
   tabItem: {
     alignItems: 'center',

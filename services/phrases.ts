@@ -44,4 +44,35 @@ export const phrasesService = {
     const response = await api.get('/phrases/quiz/words/', { params: { count } });
     return response.data.questions;
   },
+
+  /** AIが毎回生成するウォームアップフレーズ（重複防止・1日上限付き） */
+  async getAIWarmupPhrases(level?: string): Promise<AIWarmupResult> {
+    const params: Record<string, string> = {};
+    if (level) params.level = level;
+    const response = await api.get('/phrases/ai-warmup/', { params });
+    return {
+      phrases: response.data.phrases || [],
+      remaining_today: response.data.remaining_today ?? null,
+      used_today: response.data.used_today ?? null,
+      daily_limit: response.data.daily_limit ?? 5,
+    };
+  },
 };
+
+/** AIが生成するフレーズの型（DBのPhraseとは別） */
+export interface AIPhrase {
+  english: string;
+  japanese: string;
+  pronunciation_hint: string;
+  example_context: string;
+  category_label: string;
+  hash: string;
+}
+
+/** AI生成API のレスポンス型 */
+export interface AIWarmupResult {
+  phrases: AIPhrase[];
+  remaining_today: number | null;  // 本日の残り生成回数（nullは未取得）
+  used_today: number | null;        // 本日の使用回数
+  daily_limit: number;              // 1日の上限
+}
