@@ -59,6 +59,8 @@ export default function ConversationScreen() {
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const scrollRef = useRef<ScrollView>(null);
+  const recordingRef = useRef<Audio.Recording | null>(null); // 実機での race condition 対策
+  const stopRequestedRef = useRef(false); // 長押し解放が先に来た場合のフラグ
   const recordingAnim = useRef(new Animated.Value(1)).current;
   const pulseAnim = useRef(new Animated.Value(0)).current;
   // AI発言中の波形アニメーション用
@@ -338,6 +340,7 @@ export default function ConversationScreen() {
     }
 
     // ── UIを即座に録音中に切り替え（async処理を待たずに反映）──
+    stopRequestedRef.current = false; // stop要求フラグをリセット
     setIsRecording(true);
     setTranscribeStatus('listening');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -368,7 +371,17 @@ export default function ConversationScreen() {
       const { recording: rec } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
-      setRecording(rec);
+
+      // ── 実機対策：指が離れた後に録音が完成した場合は即停止して送信 ──
+      if (stopRequestedRef.current) {
+        // ユーザーがすでに指を離していた → 録音を即座に止めて文字起こし
+        recordingRef.current = rec;
+        setRecording(rec);
+        await stopRecordingWithRef(rec);
+      } else {
+        recordingRef.current = rec;
+        setRecording(rec);
+      }
     } catch (e: any) {
       // 失敗したらUIを元に戻す
       setIsRecording(false);
@@ -385,20 +398,19 @@ export default function ConversationScreen() {
     }
   };
 
-  // ─── 録音停止（長押し解放）→ 文字認識して自動送信 ───
-  const stopRecording = async () => {
-    if (!recording || !isRecording) return;
+  // ─── 録音停止の実処理（録音オブジェクトを直接受け取るバージョン） ───
+  const stopRecordingWithRef = async (rec: Audio.Recording) => {
     setIsRecording(false);
     setTranscribeStatus('processing');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     try {
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
+      await rec.stopAndUnloadAsync();
+      const uri = rec.getURI();
+      recordingRef.current = null;
       setRecording(null);
       if (uri) {
         const transcribed = await conversationService.transcribeAudio(uri);
         if (transcribed) {
-          // 認識テキストを即座に表示してから送信
           setRecognizedText(transcribed);
           setTranscribeStatus('recognized');
           await sendMessage(transcribed);
@@ -409,6 +421,23 @@ export default function ConversationScreen() {
       setTranscribeStatus('idle');
       setRecognizedText('');
     }
+  };
+
+  // ─── 録音停止（長押し解放）→ 文字認識して自動送信 ───
+  const stopRecording = async () => {
+    // refを優先して参照（stateより常に最新）
+    const currentRecording = recordingRef.current;
+
+    if (!currentRecording) {
+      // まだ録音オブジェクトが作成されていない（権限取得中など）
+      // フラグを立ててstartRecordingに後処理を委譲する
+      if (isRecording) {
+        stopRequestedRef.current = true;
+      }
+      return;
+    }
+
+    await stopRecordingWithRef(currentRecording);
   };
 
   // ─── セッション終了 ───
