@@ -1,8 +1,10 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
 import * as SecureStore from 'expo-secure-store';
 
-// ⚠️ Update this to your machine's IP address
-const BASE_URL = 'http://192.168.1.13:8000';
+// 本番URL: Railway デプロイ後に EXPO_PUBLIC_API_URL を設定する
+// 例: EXPO_PUBLIC_API_URL=https://your-app.up.railway.app
+// ローカル開発: .env.local に EXPO_PUBLIC_API_URL=http://192.168.1.x:8000 を設定する
+const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://192.168.1.13:8000';
 
 const api: AxiosInstance = axios.create({
   baseURL: `${BASE_URL}/api`,

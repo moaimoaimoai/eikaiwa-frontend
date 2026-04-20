@@ -14,14 +14,16 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.hiraku.eikaiwaai",
+      "bundleIdentifier": "com.simple.eikaiwaai",
       "buildNumber": "1",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "英会話練習のために音声入力が必要です",
         "NSSpeechRecognitionUsageDescription": "音声を文字に変換するために使用します",
         "UIBackgroundModes": [
+          "audio",
           "audio"
-        ]
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -29,7 +31,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0F172A"
       },
-      "package": "com.hiraku.eikaiwaai",
+      "package": "com.simple.eikaiwaai",
       "versionCode": 1,
       "permissions": [
         "android.permission.RECORD_AUDIO",
