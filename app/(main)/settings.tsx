@@ -1,17 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, Alert, ActivityIndicator, Switch,
+  TextInput, Alert, ActivityIndicator, Switch, Modal, Platform,
 } from 'react-native';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuthStore } from '../../store/authStore';
+import { useNotificationStore } from '../../store/notificationStore';
 import { authService } from '../../services/auth';
 import { Colors, FontSize, FontWeight, Spacing, BorderRadius } from '../../constants/theme';
 
-const LEVEL_OPTIONS = [
+type LevelId = 'beginner' | 'intermediate' | 'advanced';
+const LEVEL_OPTIONS: { id: LevelId; label: string; emoji: string; desc: string }[] = [
   { id: 'beginner', label: '初級', emoji: '🌱', desc: 'これから英語を始める方' },
   { id: 'intermediate', label: '中級', emoji: '🌿', desc: '日常会話ができる方' },
   { id: 'advanced', label: '上級', emoji: '🌳', desc: 'ビジネスレベルの方' },
@@ -19,11 +21,49 @@ const LEVEL_OPTIONS = [
 
 export default function SettingsScreen() {
   const { user, updateUser, logout } = useAuthStore();
+  const {
+    loadSettings,
+    reminderEnabled,
+    reminderHour,
+    reminderMinute,
+    streakWarningEnabled,
+    weeklyReportEnabled,
+    achievementEnabled,
+    setReminderEnabled,
+    setReminderTime,
+    setStreakWarningEnabled,
+    setWeeklyReportEnabled,
+    setAchievementEnabled,
+  } = useNotificationStore();
+
   const [displayName, setDisplayName] = useState(user?.display_name ?? '');
-  const [selectedLevel, setSelectedLevel] = useState(user?.level ?? 'beginner');
+  const [selectedLevel, setSelectedLevel] = useState<LevelId>((user?.level as LevelId) ?? 'beginner');
   const [isEditingName, setIsEditingName] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+
+  // 時刻ピッカーモーダル
+  const [timePickerVisible, setTimePickerVisible] = useState(false);
+  const [tempHour, setTempHour] = useState(reminderHour);
+  const [tempMinute, setTempMinute] = useState(reminderMinute);
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  const formatTime = (h: number, m: number) =>
+    `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+
+  const handleOpenTimePicker = () => {
+    setTempHour(reminderHour);
+    setTempMinute(reminderMinute);
+    setTimePickerVisible(true);
+  };
+
+  const handleSaveTime = async () => {
+    await setReminderTime(tempHour, tempMinute);
+    setTimePickerVisible(false);
+  };
 
   const levelEmoji =
     user?.level === 'beginner' ? '🌱' : user?.level === 'intermediate' ? '🌿' : '🌳';
@@ -240,6 +280,192 @@ export default function SettingsScreen() {
             </TouchableOpacity>
           )}
         </View>
+
+        {/* ─── 通知設定 ─── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>通知</Text>
+          <View style={styles.card}>
+
+            {/* 学習リマインダー */}
+            <View style={styles.row}>
+              <View style={[styles.rowIcon, { backgroundColor: '#4F46E520' }]}>
+                <Text style={{ fontSize: 18 }}>🤖</Text>
+              </View>
+              <View style={styles.rowBody}>
+                <Text style={styles.rowLabel}>学習リマインダー</Text>
+                <Text style={[styles.rowValue, { fontSize: FontSize.sm, color: Colors.textMuted }]}>
+                  AIアバターが待っている通知
+                </Text>
+              </View>
+              <Switch
+                value={reminderEnabled}
+                onValueChange={setReminderEnabled}
+                trackColor={{ false: Colors.backgroundInput, true: Colors.primary }}
+                thumbColor="#fff"
+              />
+            </View>
+
+            {/* リマインダー時刻ピッカー（ONのときだけ表示） */}
+            {reminderEnabled && (
+              <>
+                <View style={styles.divider} />
+                <TouchableOpacity style={styles.row} onPress={handleOpenTimePicker} activeOpacity={0.7}>
+                  <View style={[styles.rowIcon, { backgroundColor: Colors.primaryLight + '20' }]}>
+                    <Ionicons name="time-outline" size={20} color={Colors.primaryLight} />
+                  </View>
+                  <View style={styles.rowBody}>
+                    <Text style={styles.rowLabel}>通知時刻</Text>
+                    <Text style={[styles.rowValue, { color: Colors.primary, fontWeight: FontWeight.bold }]}>
+                      {formatTime(reminderHour, reminderMinute)}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color={Colors.textMuted} />
+                </TouchableOpacity>
+              </>
+            )}
+
+            <View style={styles.divider} />
+
+            {/* ストリーク警告 */}
+            <View style={styles.row}>
+              <View style={[styles.rowIcon, { backgroundColor: '#FB923C20' }]}>
+                <Text style={{ fontSize: 18 }}>🔥</Text>
+              </View>
+              <View style={styles.rowBody}>
+                <Text style={styles.rowLabel}>ストリーク警告</Text>
+                <Text style={[styles.rowValue, { fontSize: FontSize.sm, color: Colors.textMuted }]}>
+                  毎日23:00 — 学習し忘れ防止
+                </Text>
+              </View>
+              <Switch
+                value={streakWarningEnabled}
+                onValueChange={setStreakWarningEnabled}
+                trackColor={{ false: Colors.backgroundInput, true: '#FB923C' }}
+                thumbColor="#fff"
+              />
+            </View>
+
+            <View style={styles.divider} />
+
+            {/* 週次レポート */}
+            <View style={styles.row}>
+              <View style={[styles.rowIcon, { backgroundColor: '#22C55E20' }]}>
+                <Text style={{ fontSize: 18 }}>📊</Text>
+              </View>
+              <View style={styles.rowBody}>
+                <Text style={styles.rowLabel}>週次レポート</Text>
+                <Text style={[styles.rowValue, { fontSize: FontSize.sm, color: Colors.textMuted }]}>
+                  毎週日曜20:00 — 週の振り返り
+                </Text>
+              </View>
+              <Switch
+                value={weeklyReportEnabled}
+                onValueChange={setWeeklyReportEnabled}
+                trackColor={{ false: Colors.backgroundInput, true: Colors.success }}
+                thumbColor="#fff"
+              />
+            </View>
+
+            <View style={styles.divider} />
+
+            {/* 達成バッジ */}
+            <View style={styles.row}>
+              <View style={[styles.rowIcon, { backgroundColor: '#F59E0B20' }]}>
+                <Text style={{ fontSize: 18 }}>🏆</Text>
+              </View>
+              <View style={styles.rowBody}>
+                <Text style={styles.rowLabel}>達成バッジ通知</Text>
+                <Text style={[styles.rowValue, { fontSize: FontSize.sm, color: Colors.textMuted }]}>
+                  会話の節目でお祝い通知
+                </Text>
+              </View>
+              <Switch
+                value={achievementEnabled}
+                onValueChange={setAchievementEnabled}
+                trackColor={{ false: Colors.backgroundInput, true: Colors.gold }}
+                thumbColor="#fff"
+              />
+            </View>
+
+          </View>
+        </View>
+
+        {/* ─── 時刻ピッカーモーダル ─── */}
+        <Modal
+          visible={timePickerVisible}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setTimePickerVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalSheet}>
+              <Text style={styles.modalTitle}>通知時刻を設定</Text>
+
+              <View style={styles.timePickerRow}>
+                {/* 時間 */}
+                <View style={styles.timeColumn}>
+                  <Text style={styles.timeLabel}>時</Text>
+                  <TouchableOpacity
+                    style={styles.timeArrow}
+                    onPress={() => setTempHour((h) => (h + 1) % 24)}
+                  >
+                    <Ionicons name="chevron-up" size={24} color={Colors.primary} />
+                  </TouchableOpacity>
+                  <Text style={styles.timeValue}>{String(tempHour).padStart(2, '0')}</Text>
+                  <TouchableOpacity
+                    style={styles.timeArrow}
+                    onPress={() => setTempHour((h) => (h - 1 + 24) % 24)}
+                  >
+                    <Ionicons name="chevron-down" size={24} color={Colors.primary} />
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={styles.timeSeparator}>:</Text>
+
+                {/* 分 */}
+                <View style={styles.timeColumn}>
+                  <Text style={styles.timeLabel}>分</Text>
+                  <TouchableOpacity
+                    style={styles.timeArrow}
+                    onPress={() => setTempMinute((m) => (m + 5) % 60)}
+                  >
+                    <Ionicons name="chevron-up" size={24} color={Colors.primary} />
+                  </TouchableOpacity>
+                  <Text style={styles.timeValue}>{String(tempMinute).padStart(2, '0')}</Text>
+                  <TouchableOpacity
+                    style={styles.timeArrow}
+                    onPress={() => setTempMinute((m) => (m - 5 + 60) % 60)}
+                  >
+                    <Ionicons name="chevron-down" size={24} color={Colors.primary} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <Text style={styles.timePreview}>
+                毎日 {String(tempHour).padStart(2, '0')}:{String(tempMinute).padStart(2, '0')} に通知
+              </Text>
+
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={styles.modalCancelButton}
+                  onPress={() => setTimePickerVisible(false)}
+                >
+                  <Text style={styles.modalCancelText}>キャンセル</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.modalSaveButton} onPress={handleSaveTime}>
+                  <LinearGradient
+                    colors={['#4F46E5', '#7C3AED']}
+                    style={styles.modalSaveGradient}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                  >
+                    <Text style={styles.modalSaveText}>設定する</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
 
         {/* ─── サブスクリプション ─── */}
         <View style={styles.section}>
@@ -509,4 +735,94 @@ const styles = StyleSheet.create({
   /* Footer */
   footer: { alignItems: 'center', marginTop: Spacing.xl },
   footerText: { fontSize: FontSize.xs, color: Colors.textMuted },
+
+  /* Time picker modal */
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: Colors.backgroundCard,
+    borderTopLeftRadius: BorderRadius.xl,
+    borderTopRightRadius: BorderRadius.xl,
+    padding: Spacing.xl,
+    paddingBottom: Spacing.xxl,
+    gap: Spacing.lg,
+  },
+  modalTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+    textAlign: 'center',
+  },
+  timePickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.md,
+  },
+  timeColumn: {
+    alignItems: 'center',
+    gap: Spacing.xs,
+    minWidth: 80,
+  },
+  timeLabel: {
+    fontSize: FontSize.sm,
+    color: Colors.textMuted,
+    fontWeight: FontWeight.medium,
+  },
+  timeArrow: {
+    padding: Spacing.sm,
+    backgroundColor: Colors.backgroundInput,
+    borderRadius: BorderRadius.md,
+  },
+  timeValue: {
+    fontSize: 48,
+    fontWeight: FontWeight.extrabold,
+    color: Colors.textPrimary,
+    lineHeight: 56,
+  },
+  timeSeparator: {
+    fontSize: 40,
+    fontWeight: FontWeight.bold,
+    color: Colors.primary,
+    marginTop: 20,
+  },
+  timePreview: {
+    fontSize: FontSize.sm,
+    color: Colors.textMuted,
+    textAlign: 'center',
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginTop: Spacing.xs,
+  },
+  modalCancelButton: {
+    flex: 1,
+    paddingVertical: Spacing.md,
+    alignItems: 'center',
+    backgroundColor: Colors.backgroundInput,
+    borderRadius: BorderRadius.lg,
+  },
+  modalCancelText: {
+    fontSize: FontSize.md,
+    color: Colors.textSecondary,
+    fontWeight: FontWeight.medium,
+  },
+  modalSaveButton: {
+    flex: 2,
+    borderRadius: BorderRadius.lg,
+    overflow: 'hidden',
+  },
+  modalSaveGradient: {
+    paddingVertical: Spacing.md,
+    alignItems: 'center',
+  },
+  modalSaveText: {
+    fontSize: FontSize.md,
+    color: '#fff',
+    fontWeight: FontWeight.bold,
+  },
 });

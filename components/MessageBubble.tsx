@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Animated } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, BorderRadius, FontSize, FontWeight, Spacing } from '../constants/theme';
 import { Message, Correction } from '../types';
@@ -15,6 +15,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 }) => {
   const isUser = message.role === 'user';
   const [showCorrection, setShowCorrection] = useState(!!correction);
+  const [showPhrases, setShowPhrases] = useState(false);
 
   const mistakeTypeColors: Record<string, string> = {
     grammar: Colors.grammar,
@@ -22,6 +23,14 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     pronunciation: Colors.pronunciation,
     spelling: Colors.spelling,
     other: Colors.other,
+  };
+
+  const mistakeTypeLabels: Record<string, string> = {
+    grammar: '文法',
+    vocabulary: '語彙',
+    pronunciation: '発音',
+    spelling: 'スペル',
+    other: 'その他',
   };
 
   return (
@@ -49,19 +58,20 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         {/* Correction card */}
         {correction && showCorrection && (
           <View style={[styles.correctionCard, { borderLeftColor: mistakeTypeColors[correction.mistake_type] || Colors.error }]}>
+            {/* Header */}
             <View style={styles.correctionHeader}>
-              <View style={styles.correctionBadge}>
-                <Text style={styles.correctionBadgeText}>
-                  {correction.mistake_type === 'grammar' ? '文法' :
-                   correction.mistake_type === 'vocabulary' ? '語彙' :
-                   correction.mistake_type === 'pronunciation' ? '発音' : 'その他'}
+              <View style={[styles.correctionBadge, { backgroundColor: (mistakeTypeColors[correction.mistake_type] || Colors.error) + '25' }]}>
+                <Ionicons name="construct" size={11} color={mistakeTypeColors[correction.mistake_type] || Colors.error} />
+                <Text style={[styles.correctionBadgeText, { color: mistakeTypeColors[correction.mistake_type] || Colors.error }]}>
+                  {mistakeTypeLabels[correction.mistake_type] || 'その他'}
                 </Text>
               </View>
-              <TouchableOpacity onPress={() => setShowCorrection(false)}>
+              <TouchableOpacity onPress={() => setShowCorrection(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <Ionicons name="close" size={16} color={Colors.textMuted} />
               </TouchableOpacity>
             </View>
 
+            {/* Original → Corrected */}
             <View style={styles.correctionRow}>
               <Text style={styles.correctionLabel}>❌</Text>
               <Text style={styles.originalText}>{correction.original}</Text>
@@ -70,8 +80,48 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
               <Text style={styles.correctionLabel}>✅</Text>
               <Text style={styles.correctedText}>{correction.corrected}</Text>
             </View>
-            {correction.explanation && (
+
+            {/* Explanation */}
+            {correction.explanation ? (
               <Text style={styles.explanationText}>{correction.explanation}</Text>
+            ) : null}
+
+            {/* ── Advice ── */}
+            {correction.advice_ja ? (
+              <View style={styles.adviceRow}>
+                <Ionicons name="bulb" size={13} color={Colors.warning} />
+                <Text style={styles.adviceText}>{correction.advice_ja}</Text>
+              </View>
+            ) : null}
+
+            {/* ── Useful Phrases ── */}
+            {correction.useful_phrases && correction.useful_phrases.length > 0 && (
+              <View style={styles.phrasesSection}>
+                <TouchableOpacity
+                  style={styles.phrasesToggle}
+                  onPress={() => setShowPhrases(v => !v)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="chatbubbles" size={13} color={Colors.info} />
+                  <Text style={styles.phrasesToggleText}>便利フレーズ {correction.useful_phrases.length}個</Text>
+                  <Ionicons
+                    name={showPhrases ? 'chevron-up' : 'chevron-down'}
+                    size={13}
+                    color={Colors.info}
+                  />
+                </TouchableOpacity>
+
+                {showPhrases && (
+                  <View style={styles.phrasesList}>
+                    {correction.useful_phrases.map((phrase, i) => (
+                      <View key={i} style={styles.phraseItem}>
+                        <Text style={styles.phraseEnglish}>"{phrase.english}"</Text>
+                        <Text style={styles.phraseJapanese}>{phrase.japanese}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
             )}
           </View>
         )}
@@ -104,7 +154,7 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   bubbleWrapper: {
-    maxWidth: '78%',
+    maxWidth: '82%',
     gap: 6,
   },
   userBubbleWrapper: { alignItems: 'flex-end' },
@@ -142,12 +192,14 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.error,
   },
+
+  /* Correction card */
   correctionCard: {
-    backgroundColor: 'rgba(239,68,68,0.08)',
+    backgroundColor: 'rgba(239,68,68,0.07)',
     borderRadius: BorderRadius.md,
     padding: Spacing.sm,
     borderLeftWidth: 3,
-    gap: 6,
+    gap: 7,
   },
   correctionHeader: {
     flexDirection: 'row',
@@ -155,13 +207,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   correctionBadge: {
-    backgroundColor: 'rgba(239,68,68,0.2)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     borderRadius: 4,
     paddingHorizontal: 8,
-    paddingVertical: 2,
+    paddingVertical: 3,
   },
   correctionBadgeText: {
-    color: Colors.error,
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
   },
@@ -188,6 +241,63 @@ const styles = StyleSheet.create({
   explanationText: {
     color: Colors.textSecondary,
     fontSize: FontSize.xs,
+    lineHeight: 18,
+  },
+
+  /* Advice */
+  adviceRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    backgroundColor: Colors.warning + '15',
+    borderRadius: BorderRadius.sm,
+    padding: 8,
     marginTop: 2,
+  },
+  adviceText: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+    lineHeight: 18,
+  },
+
+  /* Useful phrases */
+  phrasesSection: {
+    marginTop: 2,
+  },
+  phrasesToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: Colors.info + '15',
+    borderRadius: BorderRadius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  phrasesToggleText: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    color: Colors.info,
+    fontWeight: FontWeight.semibold,
+  },
+  phrasesList: {
+    marginTop: 4,
+    gap: 5,
+  },
+  phraseItem: {
+    backgroundColor: Colors.backgroundInput,
+    borderRadius: BorderRadius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    gap: 2,
+  },
+  phraseEnglish: {
+    fontSize: FontSize.sm,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.medium,
+  },
+  phraseJapanese: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
   },
 });

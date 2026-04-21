@@ -45,6 +45,33 @@ export const phrasesService = {
     return response.data.questions;
   },
 
+  /** AIが毎回生成する単語カード（重複防止・1日上限付き） */
+  async getAIWords(level?: string): Promise<AIWordResult> {
+    const params: Record<string, string> = {};
+    if (level) params.level = level;
+    try {
+      const response = await api.get('/phrases/ai-words/', { params });
+      return {
+        words: response.data.words || [],
+        remaining_today: response.data.remaining_today ?? null,
+        used_today: response.data.used_today ?? null,
+        daily_limit: response.data.daily_limit ?? 5,
+        limit_reached: false,
+      };
+    } catch (e: any) {
+      if (e?.response?.status === 429) {
+        return {
+          words: e.response.data.words || [],
+          remaining_today: 0,
+          used_today: e.response.data.daily_limit ?? 5,
+          daily_limit: e.response.data.daily_limit ?? 5,
+          limit_reached: true,
+        };
+      }
+      throw e;
+    }
+  },
+
   /** AIが毎回生成するウォームアップフレーズ（重複防止・1日上限付き） */
   async getAIWarmupPhrases(level?: string): Promise<AIWarmupResult> {
     const params: Record<string, string> = {};
@@ -87,8 +114,29 @@ export interface AIPhrase {
 /** AI生成API のレスポンス型 */
 export interface AIWarmupResult {
   phrases: AIPhrase[];
-  remaining_today: number | null;  // 本日の残り生成回数（nullは未取得）
-  used_today: number | null;        // 本日の使用回数
-  daily_limit: number;              // 1日の上限
-  limit_reached: boolean;           // 上限到達フラグ
+  remaining_today: number | null;
+  used_today: number | null;
+  daily_limit: number;
+  limit_reached: boolean;
+}
+
+/** AIが生成する単語カードの型 */
+export interface AIWord {
+  word: string;
+  reading: string;
+  definition_ja: string;
+  part_of_speech: string;
+  example_sentence: string;
+  example_sentence_ja: string;
+  memory_hook: string;
+  hash: string;
+}
+
+/** AI単語生成API のレスポンス型 */
+export interface AIWordResult {
+  words: AIWord[];
+  remaining_today: number | null;
+  used_today: number | null;
+  daily_limit: number;
+  limit_reached: boolean;
 }

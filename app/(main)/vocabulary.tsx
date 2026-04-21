@@ -7,12 +7,13 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { mistakesService } from '../../services/mistakes';
+import { fetchSavedPhrases, deleteSavedPhrase, toggleSavedPhraseMastered } from '../../services/savedPhrases';
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
 import { Colors, FontSize, FontWeight, Spacing, BorderRadius } from '../../constants/theme';
-import { Mistake, QuizQuestion } from '../../types';
+import { Mistake, QuizQuestion, SavedPhrase } from '../../types';
 
-type Tab = 'list' | 'quiz';
+type Tab = 'list' | 'quiz' | 'phrases';
 
 const MISTAKE_TYPE_INFO: Record<string, { label: string; color: string; icon: keyof typeof Ionicons.glyphMap }> = {
   grammar:      { label: '文法',   color: Colors.grammar,      icon: 'construct' },
@@ -22,22 +23,38 @@ const MISTAKE_TYPE_INFO: Record<string, { label: string; color: string; icon: ke
   other:        { label: 'その他', color: Colors.other,         icon: 'ellipsis-horizontal-circle' },
 };
 
+const SOURCE_INFO: Record<string, { label: string; color: string; icon: keyof typeof Ionicons.glyphMap }> = {
+  coaching:   { label: 'コーチング', color: '#7C3AED', icon: 'chatbubbles' },
+  summary:    { label: 'まとめ',     color: '#0891B2', icon: 'document-text' },
+  correction: { label: '添削',       color: '#D97706', icon: 'create' },
+};
+
 export default function VocabularyScreen() {
   const [activeTab, setActiveTab] = useState<Tab>('list');
+
+  // ── ミス一覧 ──
   const [mistakes, setMistakes] = useState<Mistake[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<string>('all');
   const [showMastered, setShowMastered] = useState(false);
   const [summary, setSummary] = useState<any>(null);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
+  // ── クイズ ──
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [quizIndex, setQuizIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const [score, setScore] = useState(0);
   const [quizDone, setQuizDone] = useState(false);
   const [quizLoading, setQuizLoading] = useState(false);
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  // ── フレーズ帳 ──
+  const [savedPhrases, setSavedPhrases] = useState<SavedPhrase[]>([]);
+  const [phrasesLoading, setPhrasesLoading] = useState(false);
+  const [phrasesRefreshing, setPhrasesRefreshing] = useState(false);
+  const [phraseSourceFilter, setPhraseSourceFilter] = useState<string>('all');
+  const [phraseMasteredFilter, setPhraseMasteredFilter] = useState<'all' | 'unmastered' | 'mastered'>('all');
 
   const loadData = useCallback(async () => {
     try {
@@ -50,12 +67,27 @@ export default function VocabularyScreen() {
     } catch {}
   }, []);
 
-  useEffect(() => { loadData().finally(() => setLoading(false)); }, []);
+  const loadSavedPhrases = useCallback(async () => {
+    try {
+      const data = await fetchSavedPhrases();
+      setSavedPhrases(data.results);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    Promise.all([loadData(), loadSavedPhrases()]).finally(() => setLoading(false));
+  }, []);
 
   const onRefresh = async () => {
     setRefreshing(true);
     await loadData();
     setRefreshing(false);
+  };
+
+  const onPhrasesRefresh = async () => {
+    setPhrasesRefreshing(true);
+    await loadSavedPhrases();
+    setPhrasesRefreshing(false);
   };
 
   const loadQuiz = async () => {
@@ -101,11 +133,42 @@ export default function VocabularyScreen() {
     } catch {}
   };
 
+  const handleDeletePhrase = async (id: number) => {
+    Alert.alert('削除確認', 'このフレーズを削除しますか？', [
+      { text: 'キャンセル', style: 'cancel' },
+      {
+        text: '削除', style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteSavedPhrase(id);
+            setSavedPhrases(prev => prev.filter(p => p.id !== id));
+          } catch {}
+        },
+      },
+    ]);
+  };
+
+  const handleTogglePhrasesMastered = async (id: number) => {
+    try {
+      const result = await toggleSavedPhraseMastered(id);
+      setSavedPhrases(prev => prev.map(p => p.id === id ? { ...p, is_mastered: result.is_mastered } : p));
+    } catch {}
+  };
+
   const filteredMistakes = mistakes.filter(m => {
     if (!showMastered && m.is_mastered) return false;
     if (filter !== 'all' && m.mistake_type !== filter) return false;
     return true;
   });
+
+  const filteredPhrases = savedPhrases.filter(p => {
+    if (phraseSourceFilter !== 'all' && p.source !== phraseSourceFilter) return false;
+    if (phraseMasteredFilter === 'mastered' && !p.is_mastered) return false;
+    if (phraseMasteredFilter === 'unmastered' && p.is_mastered) return false;
+    return true;
+  });
+
+  const masteredCount = savedPhrases.filter(p => p.is_mastered).length;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
@@ -119,15 +182,19 @@ export default function VocabularyScreen() {
         </View>
         <View style={styles.tabs}>
           {([
-            { id: 'list', label: 'ミス一覧', icon: 'list' },
-            { id: 'quiz', label: 'クイズ',   icon: 'help-circle' },
+            { id: 'list',    label: 'ミス一覧',   icon: 'list' },
+            { id: 'quiz',    label: 'クイズ',      icon: 'help-circle' },
+            { id: 'phrases', label: 'フレーズ帳',  icon: 'bookmark' },
           ] as const).map(tab => (
             <TouchableOpacity
               key={tab.id}
               style={[styles.tab, activeTab === tab.id && styles.tabActive]}
-              onPress={() => { setActiveTab(tab.id); if (tab.id === 'quiz') loadQuiz(); }}
+              onPress={() => {
+                setActiveTab(tab.id);
+                if (tab.id === 'quiz') loadQuiz();
+              }}
             >
-              <Ionicons name={tab.icon} size={15} color={activeTab === tab.id ? '#fff' : 'rgba(255,255,255,0.5)'} />
+              <Ionicons name={tab.icon} size={14} color={activeTab === tab.id ? '#fff' : 'rgba(255,255,255,0.5)'} />
               <Text style={[styles.tabText, activeTab === tab.id && styles.tabTextActive]}>{tab.label}</Text>
             </TouchableOpacity>
           ))}
@@ -269,7 +336,8 @@ export default function VocabularyScreen() {
             })
           )}
         </ScrollView>
-      ) : (
+
+      ) : activeTab === 'quiz' ? (
         <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
           {quizLoading ? (
             <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 80 }} />
@@ -363,6 +431,134 @@ export default function VocabularyScreen() {
             </View>
           )}
         </ScrollView>
+
+      ) : (
+        /* ─────────── フレーズ帳 ─────────── */
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.content}
+          refreshControl={<RefreshControl refreshing={phrasesRefreshing} onRefresh={onPhrasesRefresh} tintColor={Colors.primary} />}
+        >
+          {/* Stats bar */}
+          <View style={styles.summaryCards}>
+            {[
+              { value: savedPhrases.length, label: '合計',      icon: 'bookmark' as const,         color: '#7C3AED' },
+              { value: masteredCount,        label: 'マスター済', icon: 'checkmark-circle' as const, color: Colors.success },
+              { value: savedPhrases.length - masteredCount, label: '練習中', icon: 'refresh-circle' as const, color: Colors.warning },
+            ].map((s, i) => (
+              <Card key={i} style={styles.summaryCard} variant="glass">
+                <View style={[styles.summaryIconWrap, { backgroundColor: s.color + '20' }]}>
+                  <Ionicons name={s.icon} size={18} color={s.color} />
+                </View>
+                <Text style={[styles.summaryValue, { color: s.color }]}>{s.value}</Text>
+                <Text style={styles.summaryLabel}>{s.label}</Text>
+              </Card>
+            ))}
+          </View>
+
+          {/* Source filter */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersScroll}>
+            <View style={styles.filters}>
+              <TouchableOpacity
+                style={[styles.filterChip, phraseSourceFilter === 'all' && styles.filterChipActive]}
+                onPress={() => setPhraseSourceFilter('all')}
+              >
+                <Ionicons name="apps" size={12} color={phraseSourceFilter === 'all' ? Colors.primary : Colors.textMuted} />
+                <Text style={[styles.filterText, phraseSourceFilter === 'all' && styles.filterTextActive]}>すべて</Text>
+              </TouchableOpacity>
+              {Object.entries(SOURCE_INFO).map(([key, info]) => (
+                <TouchableOpacity
+                  key={key}
+                  style={[styles.filterChip, phraseSourceFilter === key && { backgroundColor: info.color + '20', borderColor: info.color }]}
+                  onPress={() => setPhraseSourceFilter(key)}
+                >
+                  <Ionicons name={info.icon} size={12} color={phraseSourceFilter === key ? info.color : Colors.textMuted} />
+                  <Text style={[styles.filterText, phraseSourceFilter === key && { color: info.color, fontWeight: FontWeight.semibold }]}>
+                    {info.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity
+                style={[styles.filterChip, phraseMasteredFilter === 'mastered' && styles.filterChipSuccess]}
+                onPress={() => setPhraseMasteredFilter(f => f === 'mastered' ? 'all' : 'mastered')}
+              >
+                <Ionicons name="checkmark-circle" size={12} color={phraseMasteredFilter === 'mastered' ? Colors.success : Colors.textMuted} />
+                <Text style={[styles.filterText, phraseMasteredFilter === 'mastered' && styles.filterTextSuccess]}>マスター済み</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+
+          {phrasesLoading ? (
+            <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 40 }} />
+          ) : filteredPhrases.length === 0 ? (
+            <View style={styles.emptyState}>
+              <View style={styles.emptyIconWrap}>
+                <Ionicons name="bookmark-outline" size={40} color={Colors.textMuted} />
+              </View>
+              <Text style={styles.emptyTitle}>フレーズがありません</Text>
+              <Text style={styles.emptyDesc}>
+                会話セッション中に役立つフレーズが自動的にここに保存されます
+              </Text>
+            </View>
+          ) : (
+            filteredPhrases.map(phrase => {
+              const srcInfo = SOURCE_INFO[phrase.source] || SOURCE_INFO.coaching;
+              return (
+                <View
+                  key={phrase.id}
+                  style={[styles.phraseCard, phrase.is_mastered && styles.phraseCardMastered]}
+                >
+                  {/* Header row */}
+                  <View style={styles.phraseHeader}>
+                    <View style={[styles.sourceBadge, { backgroundColor: srcInfo.color + '18' }]}>
+                      <Ionicons name={srcInfo.icon} size={12} color={srcInfo.color} />
+                      <Text style={[styles.sourceBadgeText, { color: srcInfo.color }]}>{srcInfo.label}</Text>
+                    </View>
+                    {phrase.session_topic ? (
+                      <Text style={styles.phraseTopicText}>#{phrase.session_topic}</Text>
+                    ) : null}
+                    <View style={styles.phraseActions}>
+                      <TouchableOpacity
+                        onPress={() => handleTogglePhrasesMastered(phrase.id)}
+                        style={styles.phraseActionBtn}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Ionicons
+                          name={phrase.is_mastered ? 'checkmark-circle' : 'checkmark-circle-outline'}
+                          size={22}
+                          color={phrase.is_mastered ? Colors.success : Colors.textMuted}
+                        />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => handleDeletePhrase(phrase.id)}
+                        style={styles.phraseActionBtn}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Ionicons name="trash-outline" size={18} color={Colors.textMuted} />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  {/* English */}
+                  <Text style={styles.phraseEnglish}>{phrase.english}</Text>
+
+                  {/* Japanese */}
+                  {phrase.japanese ? (
+                    <Text style={styles.phraseJapanese}>{phrase.japanese}</Text>
+                  ) : null}
+
+                  {/* Context / tip */}
+                  {phrase.context_ja ? (
+                    <View style={styles.phraseContextRow}>
+                      <Ionicons name="bulb-outline" size={13} color={Colors.warning} />
+                      <Text style={styles.phraseContextText}>{phrase.context_ja}</Text>
+                    </View>
+                  ) : null}
+                </View>
+              );
+            })
+          )}
+        </ScrollView>
       )}
     </SafeAreaView>
   );
@@ -377,9 +573,9 @@ const styles = StyleSheet.create({
   headerIconWrap: { width: 36, height: 36, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: '#fff' },
   tabs: { flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: BorderRadius.lg, padding: 4, gap: 4 },
-  tab: { flex: 1, paddingVertical: 8, borderRadius: BorderRadius.md, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 4 },
+  tab: { flex: 1, paddingVertical: 7, borderRadius: BorderRadius.md, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 4 },
   tabActive: { backgroundColor: 'rgba(255,255,255,0.25)' },
-  tabText: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.5)', fontWeight: FontWeight.medium },
+  tabText: { fontSize: FontSize.xs, color: 'rgba(255,255,255,0.5)', fontWeight: FontWeight.medium },
   tabTextActive: { color: '#fff', fontWeight: FontWeight.semibold },
 
   scroll: { flex: 1 },
@@ -452,4 +648,28 @@ const styles = StyleSheet.create({
   quizResultTitle: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.textPrimary },
   quizResultScore: { fontSize: FontSize.xl, color: Colors.textSecondary },
   quizResultPercent: { fontSize: FontSize.xxxl, fontWeight: FontWeight.extrabold },
+
+  /* Phrase cards */
+  phraseCard: {
+    backgroundColor: Colors.backgroundCard,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.md,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  phraseCardMastered: { opacity: 0.6 },
+  phraseHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  sourceBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    borderRadius: BorderRadius.full, paddingHorizontal: Spacing.sm, paddingVertical: 3,
+  },
+  sourceBadgeText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
+  phraseTopicText: { fontSize: FontSize.xs, color: Colors.textMuted, flex: 1 },
+  phraseActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, marginLeft: 'auto' },
+  phraseActionBtn: { padding: 2 },
+  phraseEnglish: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary, lineHeight: 22 },
+  phraseJapanese: { fontSize: FontSize.sm, color: Colors.textSecondary },
+  phraseContextRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 2 },
+  phraseContextText: { flex: 1, fontSize: FontSize.xs, color: Colors.textMuted, lineHeight: 18 },
 });

@@ -8,21 +8,20 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Audio } from 'expo-av';
-import { phrasesService, AIPhrase } from '../../services/phrases';
+import { phrasesService, AIPhrase, AIWord } from '../../services/phrases';
 import { conversationService } from '../../services/conversation';
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
 import { Colors, FontSize, FontWeight, Spacing, BorderRadius } from '../../constants/theme';
-import { Phrase, QuizQuestion } from '../../types';
+import { Phrase } from '../../types';
 
 const { width } = Dimensions.get('window');
 
-type Tab = 'phrases' | 'words' | 'quiz';
+type Tab = 'phrases' | 'words';
 
 const TAB_CONFIG: { id: Tab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { id: 'phrases', label: 'フレーズ', icon: 'chatbubble-ellipses' },
   { id: 'words',   label: '単語',     icon: 'text' },
-  { id: 'quiz',    label: 'クイズ',   icon: 'help-circle' },
 ];
 
 /** カードに表示する統一フレーズ型（DB・AI両対応） */
@@ -64,43 +63,38 @@ function aiToDisplay(p: AIPhrase): DisplayPhrase {
 export default function WarmupScreen() {
   const [activeTab, setActiveTab] = useState<Tab>('phrases');
 
-  // DB フレーズ
+  // ─── フレーズ関連 ───
   const [phrases, setPhrases] = useState<Phrase[]>([]);
-  // AI フレーズ（現在のバッチ）
   const [aiPhrases, setAIPhrases] = useState<AIPhrase[]>([]);
-  // カードに表示するフレーズ（DB or AI を統一して管理）
   const [displayPhrases, setDisplayPhrases] = useState<DisplayPhrase[]>([]);
-  // 今日確認したフレーズ（カードを次へ進めたもの）
   const [reviewedToday, setReviewedToday] = useState<DisplayPhrase[]>([]);
-
-  const [loading, setLoading] = useState(false); // クイズロード用
   const [aiLoading, setAILoading] = useState(false);
-
-  // AI 生成残り回数
   const [remainingToday, setRemainingToday] = useState<number | null>(null);
   const [dailyLimit, setDailyLimit] = useState(5);
   const [limitReached, setLimitReached] = useState(false);
-
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showJapanese, setShowJapanese] = useState(false);
+  const [flipMode, setFlipMode] = useState<'en-ja' | 'ja-en'>('en-ja');
+
+  // ─── 単語関連 (AI生成) ───
+  const [aiWords, setAIWords] = useState<AIWord[]>([]);
+  const [wordIndex, setWordIndex] = useState(0);
+  const [showWordDetail, setShowWordDetail] = useState(false);
+  const [wordLoading, setWordLoading] = useState(false);
+  const [wordRemainingToday, setWordRemainingToday] = useState<number | null>(null);
+  const [wordDailyLimit, setWordDailyLimit] = useState(5);
+  const [wordLimitReached, setWordLimitReached] = useState(false);
+  const [reviewedWordsToday, setReviewedWordsToday] = useState<AIWord[]>([]);
+
+  // ─── 共通 ───
   const [speakingId, setSpeakingId] = useState<number | null>(null);
   const [speakingHash, setSpeakingHash] = useState<string | null>(null);
   const [sound, setSound] = useState<Audio.Sound | null>(null);
 
-  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
-  const [quizIndex, setQuizIndex] = useState(0);
-  const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
-  const [quizScore, setQuizScore] = useState(0);
-  const [quizDone, setQuizDone] = useState(false);
-  const [quizType, setQuizType] = useState<'phrases' | 'words'>('phrases');
-  const [flipMode, setFlipMode] = useState<'en-ja' | 'ja-en'>('en-ja');
-
   useEffect(() => {
-    // DB フレーズ（クイズ用）を先にロードし、その後 AI フレーズをロード
-    // AI ロード中はローディング画面を表示するため、最初は aiLoading=true にしておく
     const init = async () => {
-      const dbPhrases = await loadPhrases();   // DB フレーズを取得（クイズ・フォールバック用）
-      await loadAIPhrases(dbPhrases);          // AI フレーズを取得（上限時は DB フレーズを使用）
+      const dbPhrases = await loadPhrases();
+      await loadAIPhrases(dbPhrases);
     };
     init();
     return () => { sound?.unloadAsync(); };
@@ -114,6 +108,35 @@ export default function WarmupScreen() {
     } catch (e) {
       console.error(e);
       return [];
+    }
+  };
+
+  /** AI単語をロード（初回 or 再生成ボタン） */
+  const loadAIWords = async () => {
+    setWordLoading(true);
+    try {
+      const result = await phrasesService.getAIWords();
+      if (result.remaining_today !== null) setWordRemainingToday(result.remaining_today);
+      if (result.daily_limit) setWordDailyLimit(result.daily_limit);
+
+      if (result.limit_reached) {
+        setWordLimitReached(true);
+        setWordRemainingToday(0);
+        if (result.words.length > 0) {
+          setAIWords(result.words);
+          setWordIndex(0);
+          setShowWordDetail(false);
+        }
+      } else {
+        setWordLimitReached(false);
+        setAIWords(result.words);
+        setWordIndex(0);
+        setShowWordDetail(false);
+      }
+    } catch (e: any) {
+      console.error('AI単語生成エラー:', e);
+    } finally {
+      setWordLoading(false);
     }
   };
 
@@ -198,21 +221,6 @@ export default function WarmupScreen() {
     } catch { setSpeakingHash(null); }
   };
 
-  const loadQuiz = async (type: 'phrases' | 'words') => {
-    setLoading(true);
-    try {
-      const questions = type === 'phrases'
-        ? await phrasesService.getPhrasesQuiz()
-        : await phrasesService.getWordsQuiz();
-      setQuizQuestions(questions);
-      setQuizIndex(0);
-      setQuizScore(0);
-      setQuizDone(false);
-      setSelectedAnswer(null);
-      setQuizType(type);
-    } catch {}
-    setLoading(false);
-  };
 
   const speakPhrase = async (phrase: Phrase) => {
     if (speakingId === phrase.id) return;
@@ -257,20 +265,29 @@ export default function WarmupScreen() {
     }
   };
 
-  const handleQuizAnswer = (answer: string) => {
-    if (selectedAnswer) return;
-    setSelectedAnswer(answer);
-    const correct = quizQuestions[quizIndex]?.correct_answer === answer;
-    if (correct) setQuizScore(s => s + 1);
-    setTimeout(() => {
-      if (quizIndex < quizQuestions.length - 1) {
-        setQuizIndex(i => i + 1);
-        setSelectedAnswer(null);
-      } else {
-        setQuizDone(true);
-      }
-    }, 1200);
+  // ─── 以下はフレーズタブのロジック（変更なし） ───
+
+  /** 単語カード: 次へ */
+  const nextWord = () => {
+    if (wordIndex < aiWords.length - 1) {
+      const current = aiWords[wordIndex];
+      setReviewedWordsToday(prev => {
+        if (prev.some(w => w.hash === current.hash)) return prev;
+        return [...prev, current];
+      });
+      setWordIndex(wordIndex + 1);
+      setShowWordDetail(false);
+    }
   };
+
+  /** 単語カード: 前へ */
+  const prevWord = () => {
+    if (wordIndex > 0) {
+      setWordIndex(wordIndex - 1);
+      setShowWordDetail(false);
+    }
+  };
+
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
@@ -290,7 +307,10 @@ export default function WarmupScreen() {
               style={[styles.tab, activeTab === tab.id && styles.tabActive]}
               onPress={() => {
                 setActiveTab(tab.id);
-                if (tab.id === 'quiz') loadQuiz('phrases');
+                // 単語タブ初回: AI単語がまだなければロード
+                if (tab.id === 'words' && aiWords.length === 0 && !wordLoading) {
+                  loadAIWords();
+                }
               }}
             >
               <Ionicons
@@ -342,22 +362,51 @@ export default function WarmupScreen() {
             reviewedToday={reviewedToday}
             onSpeakAI={speakAIPhrase}
           />
-        ) : activeTab === 'words' ? (
-          phrases.length === 0
-            ? <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 80 }} />
-            : <AllPhrasesTab phrases={phrases} onSpeak={speakPhrase} speakingId={speakingId} />
         ) : (
-          <QuizTab
-            questions={quizQuestions}
-            currentIndex={quizIndex}
-            selectedAnswer={selectedAnswer}
-            score={quizScore}
-            isDone={quizDone}
-            onAnswer={handleQuizAnswer}
-            onRestart={() => loadQuiz(quizType)}
-            onSwitchType={(t: 'phrases' | 'words') => loadQuiz(t)}
-            quizType={quizType}
-          />
+          // 単語タブ: AI生成ワードカード
+          wordLoading && aiWords.length === 0 ? (
+            <View style={styles.aiInitialLoading}>
+              <View style={styles.aiInitialLoadingIcon}>
+                <Ionicons name="sparkles" size={36} color="#06B6D4" />
+              </View>
+              <ActivityIndicator size="large" color={Colors.info} style={{ marginTop: Spacing.md }} />
+              <Text style={styles.aiInitialLoadingTitle}>AI単語を生成中...</Text>
+              <Text style={styles.aiInitialLoadingDesc}>あなたのレベルに合った単語を選んでいます</Text>
+            </View>
+          ) : (
+            <WordsTab
+              words={aiWords}
+              currentIndex={wordIndex}
+              showDetail={showWordDetail}
+              speakingHash={speakingHash}
+              wordLoading={wordLoading}
+              wordRemainingToday={wordRemainingToday}
+              wordDailyLimit={wordDailyLimit}
+              wordLimitReached={wordLimitReached}
+              reviewedWordsToday={reviewedWordsToday}
+              onToggleDetail={() => setShowWordDetail(!showWordDetail)}
+              onSpeak={async (word: AIWord) => {
+                if (speakingHash === word.hash) return;
+                setSpeakingHash(word.hash);
+                try {
+                  if (sound) await sound.unloadAsync();
+                  await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, allowsRecordingIOS: false, staysActiveInBackground: false });
+                  const audioBase64 = await conversationService.synthesizeSpeech(word.word, 'nova');
+                  const { sound: newSound } = await Audio.Sound.createAsync(
+                    { uri: `data:audio/mp3;base64,${audioBase64}` },
+                    { shouldPlay: true }
+                  );
+                  setSound(newSound);
+                  newSound.setOnPlaybackStatusUpdate((s) => {
+                    if (s.isLoaded && s.didJustFinish) setSpeakingHash(null);
+                  });
+                } catch { setSpeakingHash(null); }
+              }}
+              onNext={nextWord}
+              onPrev={prevWord}
+              onReloadWords={loadAIWords}
+            />
+          )
         )}
       </ScrollView>
     </SafeAreaView>
@@ -665,134 +714,236 @@ function PhrasesTab({
 }
 
 // ─────────────────────────────────────────────
-// AllPhrasesTab (単語タブ)
+// WordsTab (AI生成単語カード)
 // ─────────────────────────────────────────────
-function AllPhrasesTab({ phrases, onSpeak, speakingId }: any) {
-  return (
-    <View style={styles.allPhrasesTab}>
-      {phrases.map((phrase: Phrase) => (
-        <Card key={phrase.id} style={styles.phraseListCard}>
-          <View style={styles.phraseListRow}>
-            <View style={styles.phraseListText}>
-              <Text style={styles.phraseListEnglish}>{phrase.english}</Text>
-              <Text style={styles.phraseListJapanese}>{phrase.japanese}</Text>
-              {phrase.pronunciation_hint && (
-                <View style={styles.hintRow}>
-                  <Ionicons name="volume-medium" size={12} color={Colors.textMuted} />
-                  <Text style={styles.phraseListHint}>{phrase.pronunciation_hint}</Text>
-                </View>
-              )}
-            </View>
-            <TouchableOpacity onPress={() => onSpeak(phrase)} style={styles.listSpeakBtn}>
-              <Ionicons
-                name={speakingId === phrase.id ? 'volume-high' : 'volume-medium-outline'}
-                size={22}
-                color={speakingId === phrase.id ? Colors.primary : Colors.textMuted}
-              />
-            </TouchableOpacity>
-          </View>
-        </Card>
-      ))}
-    </View>
-  );
-}
+function WordsTab({
+  words, currentIndex, showDetail, speakingHash,
+  wordLoading, wordRemainingToday, wordDailyLimit, wordLimitReached,
+  reviewedWordsToday, onToggleDetail, onSpeak, onNext, onPrev, onReloadWords,
+}: any) {
+  const current: AIWord | undefined = words[currentIndex];
+  const isSpeaking = speakingHash === current?.hash;
 
-// ─────────────────────────────────────────────
-// QuizTab
-// ─────────────────────────────────────────────
-function QuizTab({ questions, currentIndex, selectedAnswer, score, isDone, onAnswer, onRestart, onSwitchType, quizType }: any) {
-  if (!questions?.length) {
+  const remainingColor = wordRemainingToday === null
+    ? Colors.textMuted
+    : wordRemainingToday <= 1 ? Colors.error
+    : wordRemainingToday <= 2 ? Colors.warning
+    : Colors.info;
+
+  if (!current && words.length === 0) {
     return (
       <View style={styles.emptyState}>
-        <View style={styles.emptyIconWrap}>
-          <Ionicons name="help-circle" size={40} color={Colors.primary} />
+        <View style={[styles.emptyIconWrap, { backgroundColor: Colors.info + '20' }]}>
+          <Ionicons name="cloud-offline-outline" size={40} color={Colors.textMuted} />
         </View>
-        <Text style={styles.emptyTitle}>クイズを準備中...</Text>
-        <View style={styles.quizTypeSwitch}>
-          <Button title="フレーズクイズ" onPress={() => onSwitchType('phrases')} variant={quizType === 'phrases' ? 'primary' : 'outline'} size="sm" />
-          <Button title="単語クイズ" onPress={() => onSwitchType('words')} variant={quizType === 'words' ? 'primary' : 'outline'} size="sm" />
-        </View>
+        <Text style={styles.emptyTitle}>単語を取得できません</Text>
+        <TouchableOpacity onPress={onReloadWords} style={[styles.aiRetryBtn, { marginTop: Spacing.sm }]}>
+          <Text style={[styles.aiRetryText, { color: Colors.info }]}>再試行</Text>
+        </TouchableOpacity>
       </View>
     );
   }
+  if (!current) return null;
 
-  if (isDone) {
-    const percentage = Math.round((score / questions.length) * 100);
-    const resultIcon = percentage >= 80 ? 'trophy' : percentage >= 60 ? 'happy' : 'fitness';
-    const resultColor = percentage >= 80 ? Colors.gold : percentage >= 60 ? Colors.success : Colors.secondary;
-    return (
-      <View style={styles.quizResult}>
-        <View style={[styles.resultIconWrap, { backgroundColor: resultColor + '20' }]}>
-          <Ionicons name={resultIcon as any} size={48} color={resultColor} />
-        </View>
-        <Text style={styles.quizResultTitle}>クイズ完了！</Text>
-        <Text style={styles.quizResultScore}>{score} / {questions.length} 正解</Text>
-        <Text style={[styles.quizResultPercent, { color: resultColor }]}>{percentage}%</Text>
-        <Text style={styles.quizResultMsg}>
-          {percentage >= 80 ? '素晴らしい！完璧です ✨' : percentage >= 60 ? 'よく頑張りました！' : 'もう一度練習しましょう 💪'}
-        </Text>
-        <Button title="もう一度" onPress={onRestart} style={styles.quizRestartBtn} />
-        <View style={styles.quizTypeSwitch}>
-          <Button title="フレーズ" onPress={() => onSwitchType('phrases')} variant={quizType === 'phrases' ? 'primary' : 'outline'} size="sm" />
-          <Button title="単語" onPress={() => onSwitchType('words')} variant={quizType === 'words' ? 'primary' : 'outline'} size="sm" />
-        </View>
-      </View>
-    );
-  }
-
-  const q = questions[currentIndex];
-  if (!q) return null;
+  const posColor = (pos: string) => {
+    if (pos.includes('動詞')) return Colors.secondary;
+    if (pos.includes('形容詞')) return Colors.success;
+    if (pos.includes('副詞')) return Colors.pronunciation;
+    if (pos.includes('熟語') || pos.includes('イディオム')) return Colors.gold;
+    return Colors.info;
+  };
+  const posC = posColor(current.part_of_speech || '');
 
   return (
-    <View style={styles.quizTab}>
+    <View style={styles.phraseTab}>
+      {/* プログレス */}
       <View style={styles.progressRow}>
         <View style={styles.progressBar}>
           <LinearGradient
-            colors={['#0891B2', '#4F46E5']}
-            style={[styles.progressFill, { width: `${((currentIndex + 1) / questions.length) * 100}%` }]}
+            colors={['#06B6D4', '#4F46E5']}
+            style={[styles.progressFill, { width: `${((currentIndex + 1) / words.length) * 100}%` }]}
             start={{x:0,y:0}} end={{x:1,y:0}}
           />
         </View>
-        <Text style={styles.progressText}>問題 {currentIndex + 1}/{questions.length}　スコア: {score}</Text>
+        <View style={styles.progressRight}>
+          <View style={styles.aiCardBadge}>
+            <Ionicons name="sparkles" size={10} color="#06B6D4" />
+            <Text style={[styles.aiCardBadgeText, { color: '#06B6D4' }]}>AI</Text>
+          </View>
+          <Text style={styles.progressText}>{currentIndex + 1} / {words.length}</Text>
+        </View>
       </View>
 
-      <Card style={styles.questionCard} variant="glass">
-        <Text style={styles.questionText}>{q.question}</Text>
-        {q.question_detail && <Text style={styles.questionDetail}>{q.question_detail}</Text>}
-      </Card>
+      {/* 単語カード */}
+      <LinearGradient
+        colors={['#0C1F2E', '#112233']}
+        style={styles.phraseCard}
+        start={{x:0,y:0}} end={{x:1,y:1}}
+      >
+        {/* 品詞バッジ */}
+        <View style={[styles.phraseCardBadge, { backgroundColor: posC + '30' }]}>
+          <Ionicons name="pricetag" size={12} color={posC} />
+          <Text style={[styles.phraseCardBadgeText, { color: posC }]}>{current.part_of_speech}</Text>
+        </View>
 
-      <View style={styles.optionsLabel}>
-        <Ionicons name="help-circle-outline" size={16} color={Colors.textMuted} />
-        <Text style={styles.optionsLabelText}>日本語の意味は？</Text>
-      </View>
-      <View style={styles.options}>
-        {q.options.map((option: string, i: number) => {
-          const isSelected = selectedAnswer === option;
-          const isCorrect = option === q.correct_answer;
-          let bgColor = Colors.backgroundCard;
-          let borderColor = Colors.border;
-          if (selectedAnswer) {
-            if (isCorrect) { bgColor = Colors.success + '20'; borderColor = Colors.success; }
-            else if (isSelected) { bgColor = Colors.error + '20'; borderColor = Colors.error; }
-          }
-          return (
-            <TouchableOpacity
-              key={i}
-              style={[styles.optionBtn, { backgroundColor: bgColor, borderColor }]}
-              onPress={() => onAnswer(option)}
-              disabled={!!selectedAnswer}
-              activeOpacity={0.8}
+        {/* 単語メイン */}
+        <Text style={styles.phraseEnglish}>{current.word}</Text>
+
+        {/* 読み */}
+        {current.reading ? (
+          <View style={styles.hintRow}>
+            <Ionicons name="volume-medium" size={14} color={Colors.textSecondary} />
+            <Text style={styles.pronunciationHint}>{current.reading}</Text>
+          </View>
+        ) : null}
+
+        {/* 意味を表示ボタン */}
+        <TouchableOpacity onPress={onToggleDetail} style={styles.translateButton} activeOpacity={0.8}>
+          {showDetail ? (
+            <View style={{ gap: Spacing.sm }}>
+              <Text style={[styles.phraseJapanese, { textAlign: 'left', fontSize: FontSize.lg }]}>
+                {current.definition_ja}
+              </Text>
+              {current.example_sentence ? (
+                <View style={{ gap: 4 }}>
+                  <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary, fontStyle: 'italic' }}>
+                    {current.example_sentence}
+                  </Text>
+                  <Text style={{ fontSize: FontSize.sm, color: Colors.textMuted }}>
+                    {current.example_sentence_ja}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          ) : (
+            <View style={styles.translateHintRow}>
+              <Ionicons name="eye-outline" size={16} color={Colors.textMuted} />
+              <Text style={styles.translateHint}>タップして意味・例文を表示</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+
+        {/* 覚え方のコツ */}
+        {showDetail && current.memory_hook ? (
+          <View style={styles.exampleRow}>
+            <Ionicons name="bulb" size={14} color={Colors.gold} />
+            <Text style={[styles.exampleContext, { color: Colors.warningLight }]}>{current.memory_hook}</Text>
+          </View>
+        ) : null}
+
+        {/* 発音ボタン */}
+        <TouchableOpacity
+          style={[styles.speakButton, isSpeaking && styles.speakButtonActive, { backgroundColor: isSpeaking ? '#0891B2' : Colors.info }]}
+          onPress={() => onSpeak(current)}
+          activeOpacity={0.85}
+        >
+          <Ionicons name={isSpeaking ? 'volume-high' : 'volume-medium-outline'} size={22} color="#fff" />
+          <Text style={styles.speakButtonText}>{isSpeaking ? '再生中...' : '発音を聞く'}</Text>
+        </TouchableOpacity>
+      </LinearGradient>
+
+      {/* 前へ/次へ */}
+      <View style={styles.navButtons}>
+        <Button title="← 前へ" onPress={onPrev} variant="outline" disabled={currentIndex === 0} style={styles.navBtn} />
+        {currentIndex < words.length - 1 ? (
+          <Button title="次へ →" onPress={onNext} style={styles.navBtn} />
+        ) : (
+          <TouchableOpacity
+            onPress={!wordLimitReached && !wordLoading ? onReloadWords : undefined}
+            disabled={wordLimitReached || wordLoading}
+            style={[styles.nextSetBtn, (wordLimitReached || wordLoading) && styles.nextSetBtnDisabled]}
+            activeOpacity={0.85}
+          >
+            <LinearGradient
+              colors={wordLimitReached || wordLoading ? ['#334155', '#334155'] : ['#06B6D4', '#4F46E5']}
+              style={styles.nextSetBtnGradient}
+              start={{x:0,y:0}} end={{x:1,y:0}}
             >
-              <View style={[styles.optionLabelWrap, selectedAnswer && isCorrect && { backgroundColor: Colors.success + '30' }, selectedAnswer && isSelected && !isCorrect && { backgroundColor: Colors.error + '30' }]}>
-                <Text style={styles.optionLabelText}>{['A', 'B', 'C', 'D'][i]}</Text>
-              </View>
-              <Text style={styles.optionText}>{option}</Text>
-              {selectedAnswer && isCorrect && <Ionicons name="checkmark-circle" size={20} color={Colors.success} />}
-              {selectedAnswer && isSelected && !isCorrect && <Ionicons name="close-circle" size={20} color={Colors.error} />}
-            </TouchableOpacity>
-          );
-        })}
+              <Ionicons
+                name={wordLoading ? 'hourglass-outline' : wordLimitReached ? 'ban-outline' : 'sparkles'}
+                size={16}
+                color={(wordLimitReached || wordLoading) ? Colors.textMuted : '#fff'}
+              />
+              <Text style={[styles.nextSetBtnText, (wordLimitReached || wordLoading) && { color: Colors.textMuted }]}>
+                {wordLoading ? '生成中...' : wordLimitReached ? '本日は終了' : '次の単語を生成'}
+              </Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        )}
       </View>
+
+      {/* 残り回数 + 再生成 */}
+      <View style={[styles.aiSectionHeader, { marginTop: Spacing.md }]}>
+        <View style={styles.aiSectionTitleRow}>
+          <View style={[styles.aiSparkWrap, { backgroundColor: Colors.info + '20' }]}>
+            <Ionicons name="sparkles" size={15} color={Colors.info} />
+          </View>
+          <Text style={styles.aiSectionTitle}>AI単語カード</Text>
+        </View>
+        <View style={styles.aiHeaderRight}>
+          {wordRemainingToday !== null && (
+            <View style={[styles.remainingBadge, { backgroundColor: remainingColor + '20', borderColor: remainingColor + '50' }]}>
+              <Ionicons name="refresh-circle" size={12} color={remainingColor} />
+              <Text style={[styles.remainingText, { color: remainingColor }]}>残り{wordRemainingToday}回</Text>
+            </View>
+          )}
+          <TouchableOpacity
+            onPress={onReloadWords}
+            disabled={wordLoading || wordLimitReached}
+            style={[styles.aiReloadBtn, { borderColor: Colors.info + '40', backgroundColor: Colors.info + '15' },
+              (wordLoading || wordLimitReached) && styles.aiReloadBtnDisabled]}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={wordLoading ? 'hourglass-outline' : wordLimitReached ? 'ban-outline' : 'refresh'}
+              size={14}
+              color={(wordLoading || wordLimitReached) ? Colors.textMuted : Colors.info}
+            />
+            <Text style={[styles.aiReloadText, { color: Colors.info },
+              (wordLoading || wordLimitReached) && { color: Colors.textMuted }]}>
+              {wordLoading ? '生成中...' : wordLimitReached ? '本日上限' : 'もう一度生成'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* 上限到達バナー */}
+      {wordLimitReached && (
+        <View style={styles.limitBanner}>
+          <Ionicons name="moon" size={16} color={Colors.warning} />
+          <Text style={styles.limitBannerText}>
+            本日の生成上限（{wordDailyLimit}回）に達しました。明日また挑戦してください！
+          </Text>
+        </View>
+      )}
+
+      {/* 今日確認した単語 */}
+      {reviewedWordsToday.length > 0 && (
+        <View style={[styles.reviewedSection, { marginTop: Spacing.lg }]}>
+          <View style={styles.reviewedHeader}>
+            <View style={[styles.reviewedIconWrap, { backgroundColor: Colors.info + '20' }]}>
+              <Ionicons name="checkmark-done" size={15} color={Colors.info} />
+            </View>
+            <Text style={styles.reviewedTitle}>今日確認した単語</Text>
+            <View style={[styles.reviewedCountBadge, { backgroundColor: Colors.info }]}>
+              <Text style={styles.reviewedCountText}>{reviewedWordsToday.length}</Text>
+            </View>
+          </View>
+          <View style={styles.reviewedList}>
+            {reviewedWordsToday.map((w: AIWord, idx: number) => (
+              <View key={w.hash ?? idx} style={styles.reviewedItem}>
+                <View style={styles.reviewedTexts}>
+                  <Text style={styles.reviewedEnglish}>{w.word}</Text>
+                  <Text style={styles.reviewedJapanese}>{w.definition_ja}</Text>
+                </View>
+                <View style={[styles.reviewedCheck, { backgroundColor: Colors.info + '20' }]}>
+                  <Ionicons name="checkmark" size={14} color={Colors.info} />
+                </View>
+              </View>
+            ))}
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -1046,34 +1197,4 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
 
-  /* All phrases tab */
-  allPhrasesTab: { gap: Spacing.sm },
-  phraseListCard: {},
-  phraseListRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  phraseListText: { flex: 1, gap: 4 },
-  phraseListEnglish: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  phraseListJapanese: { fontSize: FontSize.sm, color: Colors.textSecondary },
-  phraseListHint: { fontSize: FontSize.xs, color: Colors.textMuted },
-  listSpeakBtn: { padding: Spacing.sm },
-
-  /* Quiz */
-  quizTab: { gap: Spacing.md },
-  questionCard: {},
-  questionText: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary, textAlign: 'center' },
-  questionDetail: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center', marginTop: 8, fontStyle: 'italic' },
-  optionsLabel: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  optionsLabelText: { fontSize: FontSize.sm, color: Colors.textMuted },
-  options: { gap: Spacing.sm },
-  optionBtn: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, borderRadius: BorderRadius.md, padding: Spacing.md, borderWidth: 1.5 },
-  optionLabelWrap: { width: 28, height: 28, borderRadius: 8, backgroundColor: Colors.backgroundInput, alignItems: 'center', justifyContent: 'center' },
-  optionLabelText: { color: Colors.textSecondary, fontSize: FontSize.sm, fontWeight: FontWeight.bold },
-  optionText: { flex: 1, fontSize: FontSize.md, color: Colors.textPrimary },
-  quizTypeSwitch: { flexDirection: 'row', gap: Spacing.sm },
-  quizResult: { alignItems: 'center', gap: Spacing.md, paddingTop: 40 },
-  resultIconWrap: { width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center' },
-  quizResultTitle: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  quizResultScore: { fontSize: FontSize.xl, color: Colors.textSecondary },
-  quizResultPercent: { fontSize: FontSize.xxxl, fontWeight: FontWeight.extrabold },
-  quizResultMsg: { fontSize: FontSize.md, color: Colors.textSecondary, textAlign: 'center' },
-  quizRestartBtn: { width: 200 },
 });

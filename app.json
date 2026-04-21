@@ -21,7 +21,7 @@
         "NSSpeechRecognitionUsageDescription": "音声を文字に変換するために使用します",
         "UIBackgroundModes": [
           "audio",
-          "audio"
+          "fetch"
         ],
         "ITSAppUsesNonExemptEncryption": false
       },
@@ -48,7 +48,16 @@
           "faceIDPermission": "Allow $(PRODUCT_NAME) to access your Face ID biometric data."
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#4F46E5",
+          "sounds": [],
+          "iosDisplayInForeground": true
+        }
+      ]
     ],
     "newArchEnabled": true,
     "experiments": {

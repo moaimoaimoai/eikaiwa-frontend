@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, KeyboardAvoidingView, Platform,
-  Alert, ActivityIndicator, Animated, Pressable, Linking
+  Alert, ActivityIndicator, Animated, Pressable, Linking, Modal
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -13,13 +13,90 @@ import * as Haptics from 'expo-haptics';
 import { conversationService } from '../../services/conversation';
 import { useConversationStore } from '../../store/conversationStore';
 import { useAuthStore } from '../../store/authStore';
+import { useNotificationStore } from '../../store/notificationStore';
+import { sendAchievementNotification } from '../../services/notifications';
 import { AvatarDisplay } from '../../components/AvatarDisplay';
 import { MessageBubble } from '../../components/MessageBubble';
 import { Button } from '../../components/ui/Button';
 import { Colors, FontSize, FontWeight, Spacing, BorderRadius, AVATARS, TOPICS } from '../../constants/theme';
-import { Message, Correction } from '../../types';
+import { Message, Correction, TranslationResult, CoachingTip } from '../../types';
 
 type Mode = 'setup' | 'loading' | 'chat' | 'ending' | 'summary';
+
+// ── インラインコーチングカードコンポーネント ──
+function CoachingCard({ coaching, onDismiss }: { coaching: CoachingTip; onDismiss: () => void }) {
+  const [open, setOpen] = useState(true);
+  if (!open) return null;
+  return (
+    <View style={coachingStyles.card}>
+      <View style={coachingStyles.header}>
+        <View style={coachingStyles.titleRow}>
+          <Ionicons name="bulb" size={14} color={Colors.warning} />
+          <Text style={coachingStyles.title}>💬 この場面で使えるフレーズ</Text>
+        </View>
+        <TouchableOpacity onPress={() => { setOpen(false); onDismiss(); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="close" size={15} color={Colors.textMuted} />
+        </TouchableOpacity>
+      </View>
+      {coaching.tip_ja ? <Text style={coachingStyles.tip}>{coaching.tip_ja}</Text> : null}
+      {coaching.useful_phrases?.map((p, i) => (
+        <View key={i} style={coachingStyles.phraseRow}>
+          <Text style={coachingStyles.phraseEn}>"{p.english}"</Text>
+          <Text style={coachingStyles.phraseJa}>{p.japanese}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+const coachingStyles = StyleSheet.create({
+  card: {
+    marginHorizontal: Spacing.md,
+    marginBottom: 4,
+    backgroundColor: Colors.warning + '12',
+    borderRadius: BorderRadius.md,
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.warning,
+    padding: Spacing.sm,
+    gap: 6,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  title: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.bold,
+    color: Colors.warning,
+  },
+  tip: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+    lineHeight: 18,
+  },
+  phraseRow: {
+    backgroundColor: Colors.backgroundCard,
+    borderRadius: BorderRadius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    gap: 2,
+  },
+  phraseEn: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.medium,
+    color: Colors.textPrimary,
+  },
+  phraseJa: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+  },
+});
 
 /** 1セッションあたりの最大ユーザーターン数 */
 const MAX_TURNS = 10;
@@ -29,7 +106,8 @@ const WARN_AT_REMAINING = 3;
 
 export default function ConversationScreen() {
   const params = useLocalSearchParams<{ topic?: string }>();
-  const { user } = useAuthStore();
+  const { user, updateUser } = useAuthStore();
+  const { achievementEnabled } = useNotificationStore();
   const {
     sessionId, messages, corrections, isLoading,
     setSession, addMessage, addCorrection, setLoading, setSummary, resetSession,
@@ -43,6 +121,7 @@ export default function ConversationScreen() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [currentCorrection, setCurrentCorrection] = useState<Correction | null>(null);
+  const [currentCoaching, setCurrentCoaching] = useState<CoachingTip | null>(null);
   const [summary, setSummaryLocal] = useState<any>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
 
@@ -74,6 +153,16 @@ export default function ConversationScreen() {
   /** 録音中の経過秒数（UIカウンター用） */
   const [recordingSec, setRecordingSec] = useState(0);
   const recordingTickRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ── 日本語ヘルプ機能の状態 ──
+  const [showJpHelp, setShowJpHelp] = useState(false);
+  const [jpInput, setJpInput] = useState('');
+  const [isTranslating, setIsTranslating] = useState(false);
+  const [translationResult, setTranslationResult] = useState<TranslationResult | null>(null);
+  const [isJpRecording, setIsJpRecording] = useState(false);
+  const jpRecordingRef = useRef<Audio.Recording | null>(null);
+  const jpMicPhaseRef = useRef<'idle' | 'preparing' | 'recording'>('idle');
+  const [isJpPreparing, setIsJpPreparing] = useState(false);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const scrollRef = useRef<ScrollView>(null);
@@ -250,6 +339,7 @@ export default function ConversationScreen() {
     setInputText('');
     setLoading(true);
     setCurrentCorrection(null);
+    setCurrentCoaching(null);
     const newCount = userTurnCount + 1;
     setUserTurnCount(newCount);
 
@@ -262,6 +352,10 @@ export default function ConversationScreen() {
         addCorrection(result.correction);
         setCurrentCorrection(result.correction);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      }
+
+      if (result.coaching) {
+        setCurrentCoaching(result.coaching);
       }
 
       if (result.audio_base64) {
@@ -567,6 +661,94 @@ export default function ConversationScreen() {
     }
   };
 
+  // ─── 日本語ヘルプ: テキスト翻訳 ───
+  const handleTranslate = async () => {
+    const text = jpInput.trim();
+    if (!text) return;
+    setIsTranslating(true);
+    setTranslationResult(null);
+    try {
+      const result = await conversationService.translateToEnglish(text);
+      setTranslationResult(result);
+    } catch {
+      Alert.alert('エラー', '翻訳に失敗しました');
+    } finally {
+      setIsTranslating(false);
+    }
+  };
+
+  // ─── 日本語ヘルプ: 音声録音開始 ───
+  const startJpRecording = async () => {
+    if (jpMicPhaseRef.current !== 'idle') return;
+    jpMicPhaseRef.current = 'preparing';
+    setIsJpPreparing(true);
+    try {
+      const { granted } = await Audio.requestPermissionsAsync();
+      if (!granted) {
+        jpMicPhaseRef.current = 'idle';
+        setIsJpPreparing(false);
+        Alert.alert('権限が必要です', 'マイクの使用を許可してください。');
+        return;
+      }
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording: rec } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      jpRecordingRef.current = rec;
+      jpMicPhaseRef.current = 'recording';
+      setIsJpPreparing(false);
+      setIsJpRecording(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch {
+      jpMicPhaseRef.current = 'idle';
+      setIsJpPreparing(false);
+      Alert.alert('エラー', '録音を開始できませんでした。');
+    }
+  };
+
+  // ─── 日本語ヘルプ: 音声録音停止 → 文字起こし → 翻訳 ───
+  const stopJpRecording = async () => {
+    if (jpMicPhaseRef.current !== 'recording') return;
+    const rec = jpRecordingRef.current;
+    if (!rec) return;
+    jpMicPhaseRef.current = 'idle';
+    setIsJpRecording(false);
+    setIsJpPreparing(false);
+    setIsTranslating(true);
+    setTranslationResult(null);
+    try {
+      await rec.stopAndUnloadAsync();
+      const uri = rec.getURI();
+      jpRecordingRef.current = null;
+      if (uri) {
+        const transcribed = await conversationService.transcribeAudio(uri, 'ja');
+        if (transcribed) {
+          setJpInput(transcribed);
+          const result = await conversationService.translateToEnglish(transcribed);
+          setTranslationResult(result);
+        }
+      }
+    } catch {
+      Alert.alert('エラー', '音声認識に失敗しました。テキストで入力してください。');
+    } finally {
+      setIsTranslating(false);
+    }
+  };
+
+  const handleJpMicPress = async () => {
+    if (jpMicPhaseRef.current === 'idle') {
+      await startJpRecording();
+    } else if (jpMicPhaseRef.current === 'recording') {
+      await stopJpRecording();
+    }
+  };
+
+  // ─── 日本語ヘルプ: 英語でそのまま話す ───
+  const useTranslationAsInput = (english: string) => {
+    setInputText(english);
+    setShowJpHelp(false);
+    setTranslationResult(null);
+    setJpInput('');
+  };
+
   // ─── セッション終了 ───
   const endSession = async (auto = false) => {
     if (!sessionId) return;
@@ -577,6 +759,13 @@ export default function ConversationScreen() {
         setSummaryLocal(result.summary);
         setSummary(result.summary);
         setMode('summary');
+
+        // 達成バッジ通知（会話回数の節目で送信）
+        if (achievementEnabled && user) {
+          const newTotal = (user.total_conversations ?? 0) + 1;
+          updateUser({ total_conversations: newTotal });
+          await sendAchievementNotification(newTotal);
+        }
       } catch {
         setMode('chat'); // 失敗したらチャット画面に戻す
         Alert.alert('エラー', '終了処理に失敗しました');
@@ -800,6 +989,30 @@ export default function ConversationScreen() {
               </View>
             )}
 
+            {/* ── 今日の便利フレーズ ── */}
+            {summary.useful_phrases && summary.useful_phrases.length > 0 && (
+              <View style={styles.summarySection}>
+                <View style={styles.summarySectionHeader}>
+                  <Ionicons name="chatbubbles" size={16} color={Colors.info} />
+                  <Text style={styles.summarySectionTitle}>今日の会話から学べるフレーズ</Text>
+                </View>
+                {summary.useful_phrases.map((phrase, i) => (
+                  <View key={i} style={styles.summaryPhraseCard}>
+                    <View style={styles.summaryPhraseIndex}>
+                      <Text style={styles.summaryPhraseIndexText}>{i + 1}</Text>
+                    </View>
+                    <View style={styles.summaryPhraseBody}>
+                      <Text style={styles.summaryPhraseEnglish}>"{phrase.english}"</Text>
+                      <Text style={styles.summaryPhraseJapanese}>{phrase.japanese}</Text>
+                      {phrase.context_ja ? (
+                        <Text style={styles.summaryPhraseContext}>📌 {phrase.context_ja}</Text>
+                      ) : null}
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+
             <View style={styles.encouragementCard}>
               <Ionicons name="heart" size={18} color={Colors.primary} />
               <Text style={styles.encouragementText}>{summary.encouragement_ja}</Text>
@@ -840,6 +1053,150 @@ export default function ConversationScreen() {
   // ============ CHAT SCREEN ============
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+
+      {/* ─── 日本語ヘルプ モーダル ─── */}
+      <Modal
+        visible={showJpHelp}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowJpHelp(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.jpModalOverlay}
+        >
+          {/* 背景タップで閉じる */}
+          <TouchableOpacity style={{ flex: 1 }} onPress={() => setShowJpHelp(false)} activeOpacity={1} />
+          <ScrollView
+            style={styles.jpModalSheet}
+            contentContainerStyle={styles.jpModalSheetContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+          >
+            {/* ヘッダー */}
+            <View style={styles.jpModalHeader}>
+              <View style={styles.jpModalTitleRow}>
+                <Text style={styles.jpModalFlag}>🇯🇵</Text>
+                <Text style={styles.jpModalTitle}>英語でなんて言う？</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowJpHelp(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close-circle" size={26} color={Colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.jpModalSubtitle}>
+              日本語で入力するか、マイクで話しかけてください
+            </Text>
+
+            {/* 日本語入力 */}
+            <View style={styles.jpInputRow}>
+              <TextInput
+                style={styles.jpTextInput}
+                value={jpInput}
+                onChangeText={setJpInput}
+                placeholder="例: 週末は何をしましたか？"
+                placeholderTextColor={Colors.textMuted}
+                multiline
+                maxLength={300}
+              />
+              {/* 日本語マイクボタン */}
+              <TouchableOpacity
+                style={[styles.jpMicButton, isJpRecording && styles.jpMicButtonRecording]}
+                onPress={handleJpMicPress}
+                activeOpacity={0.75}
+              >
+                {isJpPreparing ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons name={isJpRecording ? 'stop' : 'mic'} size={22} color="#fff" />
+                )}
+              </TouchableOpacity>
+            </View>
+
+            {isJpRecording && (
+              <View style={styles.jpRecordingBanner}>
+                <View style={styles.jpRecDot} />
+                <Text style={styles.jpRecordingText}>話してください...（もう一度タップで停止）</Text>
+              </View>
+            )}
+
+            {/* 翻訳ボタン */}
+            {!isJpRecording && (
+              <TouchableOpacity
+                style={[styles.jpTranslateBtn, (!jpInput.trim() || isTranslating) && styles.jpTranslateBtnDisabled]}
+                onPress={handleTranslate}
+                disabled={!jpInput.trim() || isTranslating}
+                activeOpacity={0.8}
+              >
+                {isTranslating ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="language" size={18} color="#fff" />
+                    <Text style={styles.jpTranslateBtnText}>英語に翻訳する</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
+
+            {/* 翻訳結果 */}
+            {translationResult && (
+              <View style={styles.jpResultCard}>
+                {/* メイン英語 */}
+                <View style={styles.jpResultMain}>
+                  <Text style={styles.jpResultEnglish}>"{translationResult.english}"</Text>
+                  {translationResult.pronunciation_hint ? (
+                    <Text style={styles.jpResultPronunciation}>
+                      🔊 {translationResult.pronunciation_hint}
+                    </Text>
+                  ) : null}
+                  {translationResult.context_note ? (
+                    <Text style={styles.jpResultContext}>{translationResult.context_note}</Text>
+                  ) : null}
+                </View>
+
+                {/* 代替表現 */}
+                {translationResult.alternatives && translationResult.alternatives.length > 0 && (
+                  <View style={styles.jpAlternatives}>
+                    <Text style={styles.jpAlternativesLabel}>他の言い方：</Text>
+                    {translationResult.alternatives.map((alt, i) => (
+                      <TouchableOpacity
+                        key={i}
+                        style={styles.jpAlternativeItem}
+                        onPress={() => useTranslationAsInput(alt.english)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={styles.jpAlternativeLeft}>
+                          <Text style={styles.jpAlternativeEnglish}>{alt.english}</Text>
+                          <Text style={styles.jpAlternativeNote}>{alt.note}</Text>
+                        </View>
+                        <Ionicons name="arrow-forward-circle" size={18} color={Colors.primaryLight} />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+
+                {/* これで話すボタン */}
+                <TouchableOpacity
+                  style={styles.jpUseButton}
+                  onPress={() => useTranslationAsInput(translationResult.english)}
+                  activeOpacity={0.85}
+                >
+                  <LinearGradient
+                    colors={[Colors.primary, Colors.gradientEnd]}
+                    style={styles.jpUseButtonGradient}
+                    start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                  >
+                    <Ionicons name="chatbubble-ellipses" size={18} color="#fff" />
+                    <Text style={styles.jpUseButtonText}>これで話す！</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+            )}
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </Modal>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
 
         {/* ── ヘッダー ── */}
@@ -897,33 +1254,50 @@ export default function ConversationScreen() {
           </TouchableOpacity>
         )}
 
-        {/* ── メッセージ ── */}
-        <ScrollView
-          ref={scrollRef}
-          style={styles.messages}
-          contentContainerStyle={styles.messagesContent}
-          onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
-        >
-          {messages.map((msg: Message) => (
-            <MessageBubble
-              key={msg.id}
-              message={msg}
-              correction={msg.has_mistake ? messageCorrections[msg.id] || currentCorrection : null}
-              avatarEmoji={avatarInfo.emoji}
-            />
-          ))}
-          {isLoading && (
-            <View style={styles.typingIndicator}>
-              <View style={styles.avatarSmall}>
-                <Text style={{ fontSize: 16 }}>{avatarInfo.emoji}</Text>
+        {/* ── メッセージ ＋ フローティングボタン ── */}
+        <View style={styles.messagesContainer}>
+          <ScrollView
+            ref={scrollRef}
+            style={styles.messages}
+            contentContainerStyle={styles.messagesContent}
+            onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
+          >
+            {messages.map((msg: Message) => (
+              <MessageBubble
+                key={msg.id}
+                message={msg}
+                correction={msg.has_mistake ? messageCorrections[msg.id] || currentCorrection : null}
+                avatarEmoji={avatarInfo.emoji}
+              />
+            ))}
+            {isLoading && (
+              <View style={styles.typingIndicator}>
+                <View style={styles.avatarSmall}>
+                  <Text style={{ fontSize: 16 }}>{avatarInfo.emoji}</Text>
+                </View>
+                <View style={styles.typingBubble}>
+                  <ActivityIndicator size="small" color={Colors.primary} />
+                  <Text style={styles.typingText}>考え中...</Text>
+                </View>
               </View>
-              <View style={styles.typingBubble}>
-                <ActivityIndicator size="small" color={Colors.primary} />
-                <Text style={styles.typingText}>考え中...</Text>
-              </View>
-            </View>
-          )}
-        </ScrollView>
+            )}
+          </ScrollView>
+
+          {/* 🌐 英語でなんて言う？フローティングボタン */}
+          <TouchableOpacity
+            style={styles.jpHelpFab}
+            onPress={() => { setShowJpHelp(true); setTranslationResult(null); setJpInput(''); }}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="language" size={15} color="#fff" />
+            <Text style={styles.jpHelpFabText}>英語で{'\n'}なんて言う？</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* ── コーチングカード（ミスなし時の便利フレーズ） ── */}
+        {currentCoaching && (
+          <CoachingCard coaching={currentCoaching} onDismiss={() => setCurrentCoaching(null)} />
+        )}
 
         {/* クイック返答 */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.suggestions} contentContainerStyle={styles.suggestionsContent}>
@@ -1001,19 +1375,13 @@ export default function ConversationScreen() {
                   colors={[Colors.info + 'CC', Colors.secondary + 'CC']}
                   style={styles.voiceButton}
                 >
-                  {/* 波形バー */}
                   <View style={styles.waveformContainer}>
                     {[speakingBar1, speakingBar2, speakingBar3, speakingBar4].map((bar, i) => (
-                      <Animated.View
-                        key={i}
-                        style={[styles.waveBar, { transform: [{ scaleY: bar }] }]}
-                      />
+                      <Animated.View key={i} style={[styles.waveBar, { transform: [{ scaleY: bar }] }]} />
                     ))}
                   </View>
                 </LinearGradient>
-                <Text style={[styles.voiceButtonLabel, { color: Colors.info }]}>
-                  AIが話し中...
-                </Text>
+                <Text style={[styles.voiceButtonLabel, { color: Colors.info }]}>AIが話し中...</Text>
               </View>
             ) : (
               <>
@@ -1040,14 +1408,9 @@ export default function ConversationScreen() {
                     style={styles.voiceButton}
                   >
                     {isPreparing ? (
-                      /* 準備中スピナー */
                       <ActivityIndicator size="small" color="#fff" />
                     ) : (
-                      <Ionicons
-                        name={isRecording ? 'stop' : 'mic'}
-                        size={30}
-                        color="#fff"
-                      />
+                      <Ionicons name={isRecording ? 'stop' : 'mic'} size={30} color="#fff" />
                     )}
                   </LinearGradient>
                 </Pressable>
@@ -1067,6 +1430,7 @@ export default function ConversationScreen() {
               </>
             )}
           </View>
+
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -1206,6 +1570,7 @@ const styles = StyleSheet.create({
   },
   mistakeBadgeText: { flex: 1, fontSize: FontSize.xs, color: Colors.error },
 
+  messagesContainer: { flex: 1, position: 'relative' },
   messages: { flex: 1 },
   messagesContent: { paddingVertical: Spacing.md, paddingBottom: Spacing.xl },
   typingIndicator: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, paddingHorizontal: Spacing.md, marginVertical: 6 },
@@ -1283,6 +1648,216 @@ const styles = StyleSheet.create({
   micDeniedText: { flex: 1, fontSize: FontSize.xs, color: Colors.textMuted },
   micDeniedLink: { fontSize: FontSize.xs, color: Colors.primaryLight, fontWeight: FontWeight.semibold },
 
+  /* 🌐 英語でなんて言う？フローティングボタン */
+  jpHelpFab: {
+    position: 'absolute',
+    right: Spacing.md,
+    bottom: Spacing.md,
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: Colors.info,
+    borderRadius: BorderRadius.lg,
+    paddingVertical: 9,
+    paddingHorizontal: 11,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+    minWidth: 66,
+  },
+  jpHelpFabText: {
+    fontSize: 10,
+    fontWeight: FontWeight.bold,
+    color: '#fff',
+    textAlign: 'center',
+    lineHeight: 14,
+  },
+
+  /* 日本語ヘルプ モーダル */
+  jpModalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  jpModalSheet: {
+    backgroundColor: Colors.backgroundSecondary,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: '88%',
+  },
+  jpModalSheetContent: {
+    padding: Spacing.lg,
+    paddingBottom: 40,
+    gap: Spacing.md,
+  },
+  jpModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  jpModalTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  jpModalFlag: {
+    fontSize: 26,
+  },
+  jpModalTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+  },
+  jpModalSubtitle: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    marginTop: -4,
+  },
+  jpInputRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    alignItems: 'flex-end',
+  },
+  jpTextInput: {
+    flex: 1,
+    backgroundColor: Colors.backgroundInput,
+    borderRadius: BorderRadius.lg,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+    color: Colors.textPrimary,
+    fontSize: FontSize.md,
+    minHeight: 48,
+    maxHeight: 100,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  jpMicButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: Colors.info,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  jpMicButtonRecording: {
+    backgroundColor: Colors.error,
+  },
+  jpRecordingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.error + '15',
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+  },
+  jpRecDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.error,
+  },
+  jpRecordingText: {
+    fontSize: FontSize.xs,
+    color: Colors.error,
+    flex: 1,
+  },
+  jpTranslateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.info,
+    borderRadius: BorderRadius.lg,
+    paddingVertical: 14,
+  },
+  jpTranslateBtnDisabled: {
+    opacity: 0.45,
+  },
+  jpTranslateBtnText: {
+    color: '#fff',
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.bold,
+  },
+  jpResultCard: {
+    backgroundColor: Colors.backgroundCard,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.primary + '30',
+  },
+  jpResultMain: {
+    gap: 6,
+  },
+  jpResultEnglish: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.primary,
+    lineHeight: 28,
+  },
+  jpResultPronunciation: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+  },
+  jpResultContext: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+    fontStyle: 'italic',
+  },
+  jpAlternatives: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    paddingTop: Spacing.sm,
+    gap: 6,
+  },
+  jpAlternativesLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+    fontWeight: FontWeight.semibold,
+  },
+  jpAlternativeItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.backgroundInput,
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+  },
+  jpAlternativeLeft: {
+    flex: 1,
+    gap: 2,
+  },
+  jpAlternativeEnglish: {
+    fontSize: FontSize.sm,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.medium,
+  },
+  jpAlternativeNote: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+  },
+  jpUseButton: {
+    borderRadius: BorderRadius.lg,
+    overflow: 'hidden',
+    marginTop: 4,
+  },
+  jpUseButtonGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    paddingVertical: 14,
+  },
+  jpUseButtonText: {
+    color: '#fff',
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.bold,
+  },
+
   /* Push-to-Talk ボタン */
   voiceButtonContainer: { alignItems: 'center', gap: 6 },
   voiceButtonGlow: {
@@ -1313,6 +1888,53 @@ const styles = StyleSheet.create({
   summaryText: { fontSize: FontSize.md, color: Colors.textSecondary, lineHeight: 22 },
   bulletRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
   bulletItem: { flex: 1, fontSize: FontSize.md, color: Colors.textSecondary, lineHeight: 22 },
+  /* 便利フレーズカード（サマリー） */
+  summaryPhraseCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+    backgroundColor: Colors.info + '10',
+    borderRadius: BorderRadius.md,
+    padding: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.info + '25',
+  },
+  summaryPhraseIndex: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: Colors.info,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    marginTop: 2,
+  },
+  summaryPhraseIndexText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: FontWeight.bold,
+  },
+  summaryPhraseBody: {
+    flex: 1,
+    gap: 3,
+  },
+  summaryPhraseEnglish: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.bold,
+    color: Colors.primary,
+    lineHeight: 22,
+  },
+  summaryPhraseJapanese: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+  },
+  summaryPhraseContext: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+    lineHeight: 18,
+    marginTop: 2,
+  },
+
   encouragementCard: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm, backgroundColor: 'rgba(79,70,229,0.1)', borderRadius: BorderRadius.lg, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.primary + '30' },
   encouragementText: { flex: 1, fontSize: FontSize.md, color: Colors.primaryLight, lineHeight: 24 },
   summaryContainer: { flex: 1 },

@@ -52,12 +52,31 @@ export interface Message {
   created_at: string;
 }
 
+export interface UsefulPhrase {
+  english: string;
+  japanese: string;
+}
+
 export interface Correction {
   has_mistake: boolean;
   original: string;
   corrected: string;
   explanation: string;
   mistake_type: 'grammar' | 'vocabulary' | 'pronunciation' | 'spelling' | 'other';
+  advice_ja?: string;
+  useful_phrases?: UsefulPhrase[];
+}
+
+export interface TranslationResult {
+  english: string;
+  pronunciation_hint: string;
+  alternatives: Array<{ english: string; note: string }>;
+  context_note: string;
+}
+
+export interface CoachingTip {
+  tip_ja: string;
+  useful_phrases: UsefulPhrase[];
 }
 
 export interface ConversationSession {
@@ -101,6 +120,12 @@ export interface QuizQuestion {
   context?: string;
 }
 
+export interface SummaryPhrase {
+  english: string;
+  japanese: string;
+  context_ja: string;
+}
+
 export interface ConversationSummary {
   summary_ja: string;
   strong_points_ja: string[];
@@ -110,6 +135,18 @@ export interface ConversationSummary {
   accuracy_score: number;
   vocabulary_score: number;
   encouragement_ja: string;
+  useful_phrases?: SummaryPhrase[];
+}
+
+export interface SavedPhrase {
+  id: number;
+  english: string;
+  japanese: string;
+  context_ja: string;
+  source: 'coaching' | 'summary' | 'correction';
+  session_topic: string;
+  is_mastered: boolean;
+  created_at: string;
 }
 
 export interface TrendData {

@@ -1,6 +1,6 @@
 import api, { BASE_URL } from './api';
 import * as SecureStore from 'expo-secure-store';
-import { ConversationSession, Message, Correction, ConversationSummary } from '../types';
+import { ConversationSession, Message, Correction, ConversationSummary, TranslationResult, CoachingTip } from '../types';
 
 export const conversationService = {
   async startSession(topic: string, avatarName: string, avatarAccent: string) {
@@ -21,6 +21,7 @@ export const conversationService = {
       user_message: Message;
       ai_message: Message;
       correction: Correction | null;
+      coaching: CoachingTip | null;
       audio_base64: string | null;
     };
   },
@@ -45,7 +46,12 @@ export const conversationService = {
     return response.data.audio_base64;
   },
 
-  async transcribeAudio(audioUri: string): Promise<string> {
+  async translateToEnglish(japaneseText: string): Promise<TranslationResult> {
+    const response = await api.post('/conversation/translate/', { text: japaneseText });
+    return response.data as TranslationResult;
+  },
+
+  async transcribeAudio(audioUri: string, language: 'en' | 'ja' = 'en'): Promise<string> {
     // axios は React Native の FormData + multipart を正しく扱えない場合があるため
     // fetch を直接使用する。fetch は Content-Type+boundary を自動設定する。
     const formData = new FormData();
@@ -54,6 +60,9 @@ export const conversationService = {
       name: 'recording.m4a',
       type: 'audio/m4a',
     } as any);
+    if (language === 'ja') {
+      formData.append('language', 'ja');
+    }
 
     const token = await SecureStore.getItemAsync('access_token');
     const url = `${BASE_URL}/api/conversation/audio/transcribe/`;
