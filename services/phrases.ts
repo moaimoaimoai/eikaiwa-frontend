@@ -49,13 +49,28 @@ export const phrasesService = {
   async getAIWarmupPhrases(level?: string): Promise<AIWarmupResult> {
     const params: Record<string, string> = {};
     if (level) params.level = level;
-    const response = await api.get('/phrases/ai-warmup/', { params });
-    return {
-      phrases: response.data.phrases || [],
-      remaining_today: response.data.remaining_today ?? null,
-      used_today: response.data.used_today ?? null,
-      daily_limit: response.data.daily_limit ?? 5,
-    };
+    try {
+      const response = await api.get('/phrases/ai-warmup/', { params });
+      return {
+        phrases: response.data.phrases || [],
+        remaining_today: response.data.remaining_today ?? null,
+        used_today: response.data.used_today ?? null,
+        daily_limit: response.data.daily_limit ?? 5,
+        limit_reached: false,
+      };
+    } catch (e: any) {
+      // 429: 1日の上限に達した場合も、今日生成済みのフレーズを返す
+      if (e?.response?.status === 429) {
+        return {
+          phrases: e.response.data.phrases || [],
+          remaining_today: 0,
+          used_today: e.response.data.daily_limit ?? 5,
+          daily_limit: e.response.data.daily_limit ?? 5,
+          limit_reached: true,
+        };
+      }
+      throw e;
+    }
   },
 };
 
@@ -75,4 +90,5 @@ export interface AIWarmupResult {
   remaining_today: number | null;  // 本日の残り生成回数（nullは未取得）
   used_today: number | null;        // 本日の使用回数
   daily_limit: number;              // 1日の上限
+  limit_reached: boolean;           // 上限到達フラグ
 }

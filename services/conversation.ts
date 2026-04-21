@@ -1,4 +1,5 @@
-import api from './api';
+import api, { BASE_URL } from './api';
+import * as SecureStore from 'expo-secure-store';
 import { ConversationSession, Message, Correction, ConversationSummary } from '../types';
 
 export const conversationService = {
@@ -45,6 +46,8 @@ export const conversationService = {
   },
 
   async transcribeAudio(audioUri: string): Promise<string> {
+    // axios は React Native の FormData + multipart を正しく扱えない場合があるため
+    // fetch を直接使用する。fetch は Content-Type+boundary を自動設定する。
     const formData = new FormData();
     formData.append('audio', {
       uri: audioUri,
@@ -52,9 +55,22 @@ export const conversationService = {
       type: 'audio/m4a',
     } as any);
 
-    const response = await api.post('/conversation/audio/transcribe/', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+    const token = await SecureStore.getItemAsync('access_token');
+    const url = `${BASE_URL}/api/conversation/audio/transcribe/`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      body: formData,
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
     });
-    return response.data.text;
+
+    if (!response.ok) {
+      throw new Error(`transcribeAudio failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.text;
   },
 };

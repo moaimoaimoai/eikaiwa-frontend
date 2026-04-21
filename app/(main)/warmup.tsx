@@ -99,53 +99,56 @@ export default function WarmupScreen() {
     // DB フレーズ（クイズ用）を先にロードし、その後 AI フレーズをロード
     // AI ロード中はローディング画面を表示するため、最初は aiLoading=true にしておく
     const init = async () => {
-      await loadPhrases();   // DB フレーズを取得（クイズ・フォールバック用）
-      await loadAIPhrases(); // AI フレーズを取得してカードに反映
+      const dbPhrases = await loadPhrases();   // DB フレーズを取得（クイズ・フォールバック用）
+      await loadAIPhrases(dbPhrases);          // AI フレーズを取得（上限時は DB フレーズを使用）
     };
     init();
     return () => { sound?.unloadAsync(); };
   }, []);
 
-  const loadPhrases = async () => {
+  const loadPhrases = async (): Promise<Phrase[]> => {
     try {
       const data = await phrasesService.getWarmupPhrases();
       setPhrases(data);
-      // DB フレーズは displayPhrases に入れない（AI フレーズが優先）
-      // ただし AI が失敗したときのフォールバックとして phrases に保持
+      return data;
     } catch (e) {
       console.error(e);
+      return [];
     }
   };
 
-  const loadAIPhrases = async () => {
+  const loadAIPhrases = async (dbPhraseFallback: Phrase[] = []) => {
     try {
       setAILoading(true);
       const result = await phrasesService.getAIWarmupPhrases();
-      setAIPhrases(result.phrases);
 
       if (result.remaining_today !== null) setRemainingToday(result.remaining_today);
       if (result.daily_limit) setDailyLimit(result.daily_limit);
-      setLimitReached(false);
 
-      // AI フレーズをカードに反映
-      if (result.phrases.length > 0) {
-        setDisplayPhrases(result.phrases.map(aiToDisplay));
-        setCurrentIndex(0);
-        setShowJapanese(false);
-      }
-    } catch (e: any) {
-      const responseData = e?.response?.data;
-      if (e?.response?.status === 429) {
-        // 1日上限に達した → DB フレーズにフォールバック
+      if (result.limit_reached) {
+        // 上限到達: 今日生成済みのフレーズがあれば表示、なければ DB フレーズ
         setLimitReached(true);
         setRemainingToday(0);
+        if (result.phrases.length > 0) {
+          setAIPhrases(result.phrases);
+          setDisplayPhrases(result.phrases.map(aiToDisplay));
+        } else if (dbPhraseFallback.length > 0) {
+          setDisplayPhrases(dbPhraseFallback.map(dbToDisplay));
+        }
+      } else {
+        setLimitReached(false);
+        setAIPhrases(result.phrases);
+        if (result.phrases.length > 0) {
+          setDisplayPhrases(result.phrases.map(aiToDisplay));
+          setCurrentIndex(0);
+          setShowJapanese(false);
+        }
       }
-      // エラー時は DB フレーズをカードに表示
-      setPhrases(prev => {
-        if (prev.length > 0) setDisplayPhrases(prev.map(dbToDisplay));
-        return prev;
-      });
-      console.error('AI phrases error:', JSON.stringify(responseData));
+    } catch (e: any) {
+      // 予期せぬエラー: DB フレーズにフォールバック
+      if (dbPhraseFallback.length > 0) {
+        setDisplayPhrases(dbPhraseFallback.map(dbToDisplay));
+      }
     } finally {
       setAILoading(false);
     }

@@ -57,10 +57,27 @@ export default function ConversationScreen() {
   /** マイク権限の状態 */
   const [micPermission, setMicPermission] = useState<'unknown' | 'granted' | 'denied'>('unknown');
 
+  /**
+   * 録音の3フェーズ管理
+   *   idle      : ボタン未押下
+   *   preparing : ボタン押下〜録音オブジェクト生成完了前（スピナー表示）
+   *   recording : 実際に録音中（赤ボタン表示）
+   *
+   * ref で持つことで stopRecording の stale closure 問題を回避する。
+   * isPreparing state は UI レンダリング専用。
+   */
+  const micPhaseRef = useRef<'idle' | 'preparing' | 'recording'>('idle');
+  const [isPreparing, setIsPreparing] = useState(false); // スピナー表示用
+
+  /** 録音開始タイムスタンプ（最短録音時間チェック用） */
+  const recordingStartTimeRef = useRef<number | null>(null);
+  /** 録音中の経過秒数（UIカウンター用） */
+  const [recordingSec, setRecordingSec] = useState(0);
+  const recordingTickRef = useRef<NodeJS.Timeout | null>(null);
+
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const scrollRef = useRef<ScrollView>(null);
-  const recordingRef = useRef<Audio.Recording | null>(null); // 実機での race condition 対策
-  const stopRequestedRef = useRef(false); // 長押し解放が先に来た場合のフラグ
+  const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingAnim = useRef(new Animated.Value(1)).current;
   const pulseAnim = useRef(new Animated.Value(0)).current;
   // AI発言中の波形アニメーション用
@@ -324,7 +341,10 @@ export default function ConversationScreen() {
 
   // ─── 録音開始（長押し開始） ───
   const startRecording = async () => {
-    if (isLoading || isSpeaking || isAtLimit) return;
+    console.log('[MIC] onPressIn fired', { isLoading, isSpeaking, isAtLimit, phase: micPhaseRef.current, micPermission });
+    if (isLoading || isSpeaking || isAtLimit) { console.log('[MIC] EARLY RETURN: isLoading/isSpeaking/isAtLimit'); return; }
+    // 既に別フェーズ中なら無視
+    if (micPhaseRef.current !== 'idle') { console.log('[MIC] EARLY RETURN: phase not idle =', micPhaseRef.current); return; }
 
     // 既に拒否済みの場合は設定アプリへ誘導
     if (micPermission === 'denied') {
@@ -339,18 +359,25 @@ export default function ConversationScreen() {
       return;
     }
 
-    // ── UIを即座に録音中に切り替え（async処理を待たずに反映）──
-    stopRequestedRef.current = false; // stop要求フラグをリセット
-    setIsRecording(true);
-    setTranscribeStatus('listening');
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    // ── Phase 1: preparing（スピナー表示）──
+    micPhaseRef.current = 'preparing';
+    setIsPreparing(true);
+    console.log('[MIC] phase → preparing, setIsPreparing(true)');
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    const prepStart = Date.now();
+    const MIN_PREP_MS = 300; // 最低 0.3 秒は準備中スピナーを見せる（短すぎる録音防止）
 
     try {
+      // 1. 権限確認
+      console.log('[MIC] calling requestPermissionsAsync...');
       const { granted, canAskAgain } = await Audio.requestPermissionsAsync();
+      console.log('[MIC] permission result:', granted, '| phase now:', micPhaseRef.current);
+      if (micPhaseRef.current !== 'preparing') { console.log('[MIC] CANCELLED after permission'); return; }
+
       if (!granted) {
-        // 権限なし → UIを元に戻してアラート
-        setIsRecording(false);
-        setTranscribeStatus('idle');
+        micPhaseRef.current = 'idle';
+        setIsPreparing(false);
         setMicPermission('denied');
         if (!canAskAgain) {
           Alert.alert(
@@ -367,23 +394,53 @@ export default function ConversationScreen() {
         return;
       }
       setMicPermission('granted');
+
+      // 2. AudioMode 切替（実機で時間がかかるポイント）
+      console.log('[MIC] calling setAudioModeAsync...');
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      console.log('[MIC] setAudioModeAsync done | phase:', micPhaseRef.current);
+      if (micPhaseRef.current !== 'preparing') { console.log('[MIC] CANCELLED after AudioMode'); return; }
+
+      // 3. 最低表示時間に満たない場合だけ待機
+      const elapsed = Date.now() - prepStart;
+      console.log('[MIC] prep elapsed:', elapsed, 'ms, waiting:', Math.max(0, MIN_PREP_MS - elapsed), 'ms more');
+      if (elapsed < MIN_PREP_MS) {
+        await new Promise<void>(resolve => setTimeout(resolve, MIN_PREP_MS - elapsed));
+      }
+      if (micPhaseRef.current !== 'preparing') { console.log('[MIC] CANCELLED after timer wait'); return; }
+
+      // 4. 録音オブジェクト生成
+      console.log('[MIC] calling createAsync...');
       const { recording: rec } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
-
-      // ── 実機対策：指が離れた後に録音が完成した場合は即停止して送信 ──
-      if (stopRequestedRef.current) {
-        // ユーザーがすでに指を離していた → 録音を即座に止めて文字起こし
-        recordingRef.current = rec;
-        setRecording(rec);
-        await stopRecordingWithRef(rec);
-      } else {
-        recordingRef.current = rec;
-        setRecording(rec);
+      console.log('[MIC] createAsync done | phase:', micPhaseRef.current);
+      if (micPhaseRef.current !== 'preparing') {
+        console.log('[MIC] CANCELLED after createAsync - discarding recording');
+        rec.stopAndUnloadAsync().catch(() => {});
+        recordingRef.current = null;
+        return;
       }
+
+      // ── Phase 2: recording ──
+      console.log('[MIC] phase → recording');
+      recordingRef.current = rec;
+      setRecording(rec);
+      micPhaseRef.current = 'recording';
+      setIsPreparing(false);
+      setIsRecording(true);
+      setTranscribeStatus('listening');
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      // 録音開始時刻を記録し、1秒ごとにカウンターを更新
+      recordingStartTimeRef.current = Date.now();
+      setRecordingSec(0);
+      recordingTickRef.current = setInterval(() => {
+        setRecordingSec(s => s + 1);
+      }, 1000);
+
     } catch (e: any) {
-      // 失敗したらUIを元に戻す
+      micPhaseRef.current = 'idle';
+      setIsPreparing(false);
       setIsRecording(false);
       setTranscribeStatus('idle');
       const isSimulator = e?.message?.includes('simulator') || e?.message?.includes('Simulator');
@@ -400,44 +457,114 @@ export default function ConversationScreen() {
 
   // ─── 録音停止の実処理（録音オブジェクトを直接受け取るバージョン） ───
   const stopRecordingWithRef = async (rec: Audio.Recording) => {
+    console.log('[MIC] stopRecordingWithRef called');
+    // タイマークリア
+    if (recordingTickRef.current) { clearInterval(recordingTickRef.current); recordingTickRef.current = null; }
+    recordingStartTimeRef.current = null;
+    setRecordingSec(0);
+    micPhaseRef.current = 'idle';
     setIsRecording(false);
+    setIsPreparing(false);
     setTranscribeStatus('processing');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     try {
+      console.log('[MIC] calling stopAndUnloadAsync...');
       await rec.stopAndUnloadAsync();
+      console.log('[MIC] stopAndUnloadAsync done');
       const uri = rec.getURI();
+      console.log('[MIC] uri:', uri ? 'exists' : 'NULL');
       recordingRef.current = null;
       setRecording(null);
       if (uri) {
+        console.log('[MIC] calling transcribeAudio...');
         const transcribed = await conversationService.transcribeAudio(uri);
+        console.log('[MIC] transcribed:', JSON.stringify(transcribed));
         if (transcribed) {
           setRecognizedText(transcribed);
           setTranscribeStatus('recognized');
           await sendMessage(transcribed);
+        } else {
+          console.log('[MIC] transcribed is empty/null - not sending');
         }
       }
-    } catch { Alert.alert('エラー', '音声認識に失敗しました'); }
+    } catch (e: any) {
+      console.log('[MIC] ERROR in stopRecordingWithRef:', e?.message ?? e);
+      Alert.alert('エラー', '音声認識に失敗しました');
+    }
     finally {
       setTranscribeStatus('idle');
       setRecognizedText('');
     }
   };
 
-  // ─── 録音停止（長押し解放）→ 文字認識して自動送信 ───
+  // ─── 録音停止（長押し解放） ───
   const stopRecording = async () => {
-    // refを優先して参照（stateより常に最新）
-    const currentRecording = recordingRef.current;
+    const phase = micPhaseRef.current;
+    console.log('[MIC] onPressOut fired | phase:', phase);
 
-    if (!currentRecording) {
-      // まだ録音オブジェクトが作成されていない（権限取得中など）
-      // フラグを立ててstartRecordingに後処理を委譲する
-      if (isRecording) {
-        stopRequestedRef.current = true;
+    if (phase === 'preparing') {
+      // 準備フェーズ中に指が離れた → startRecording の await チェックで検知させるだけ
+      micPhaseRef.current = 'idle';
+      setIsPreparing(false);
+      return;
+    }
+
+    if (phase === 'recording') {
+      const currentRecording = recordingRef.current;
+      if (currentRecording) {
+        await stopRecordingWithRef(currentRecording);
+      } else {
+        // 万が一 ref が null でも状態だけ戻す
+        micPhaseRef.current = 'idle';
+        setIsRecording(false);
+        setTranscribeStatus('idle');
       }
       return;
     }
 
-    await stopRecordingWithRef(currentRecording);
+    // idle のまま onPressOut が来た場合は何もしない
+  };
+
+  /**
+   * ─── トグル録音（タップ1回で開始、もう1回で停止・送信）───
+   *
+   * 長押し保持型だと onPressOut が JS イベントキューで遅延し、録音開始直後に
+   * 即停止してしまう問題があるため、タップ式トグルに変更。
+   *   1回目タップ → preparing → recording
+   *   2回目タップ → 停止 → 文字起こし → 送信
+   */
+  /** 最短録音時間 (ms) — これより短いと無音・空文字になりやすい */
+  const MIN_RECORDING_MS = 1500;
+
+  const handleMicPress = async () => {
+    const phase = micPhaseRef.current;
+    console.log('[MIC] handleMicPress | phase:', phase);
+
+    if (phase === 'idle') {
+      await startRecording();
+    } else if (phase === 'preparing') {
+      // 準備中にタップ → キャンセル
+      micPhaseRef.current = 'idle';
+      setIsPreparing(false);
+    } else if (phase === 'recording') {
+      // 録音時間が短すぎる場合はガード（Whisperが空文字を返す）
+      const elapsed = recordingStartTimeRef.current ? Date.now() - recordingStartTimeRef.current : MIN_RECORDING_MS;
+      console.log('[MIC] recording elapsed:', elapsed, 'ms');
+      if (elapsed < MIN_RECORDING_MS) {
+        // まだ短すぎる → 何もしない（残り時間をフィードバック）
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        console.log('[MIC] too short, ignoring stop tap');
+        return;
+      }
+      const currentRecording = recordingRef.current;
+      if (currentRecording) {
+        await stopRecordingWithRef(currentRecording);
+      } else {
+        micPhaseRef.current = 'idle';
+        setIsRecording(false);
+        setTranscribeStatus('idle');
+      }
+    }
   };
 
   // ─── セッション終了 ───
@@ -899,8 +1026,7 @@ export default function ConversationScreen() {
                   }
                 ]} />
                 <Pressable
-                  onPressIn={startRecording}
-                  onPressOut={stopRecording}
+                  onPress={handleMicPress}
                   disabled={isLoading || isAtLimit}
                   style={({ pressed }) => [styles.voiceButtonPressable]}
                 >
@@ -908,23 +1034,35 @@ export default function ConversationScreen() {
                     colors={
                       isAtLimit ? [Colors.textMuted, Colors.textMuted] :
                       isRecording ? [Colors.error, '#DC2626'] :
+                      isPreparing ? [Colors.primary + 'AA', Colors.gradientEnd + 'AA'] :
                       [Colors.primary, Colors.gradientEnd]
                     }
                     style={styles.voiceButton}
                   >
-                    <Ionicons
-                      name={isRecording ? 'stop' : 'mic'}
-                      size={30}
-                      color="#fff"
-                    />
+                    {isPreparing ? (
+                      /* 準備中スピナー */
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Ionicons
+                        name={isRecording ? 'stop' : 'mic'}
+                        size={30}
+                        color="#fff"
+                      />
+                    )}
                   </LinearGradient>
                 </Pressable>
-                <Text style={[styles.voiceButtonLabel, isRecording && { color: Colors.error }]}>
+                <Text style={[
+                  styles.voiceButtonLabel,
+                  isRecording && { color: Colors.error },
+                  isPreparing && { color: Colors.primaryLight },
+                ]}>
                   {isAtLimit
                     ? '上限に達しました'
                     : isRecording
-                    ? '離すと送信'
-                    : '長押しで話す'}
+                    ? (recordingSec < 2 ? `話し続けてください... ${recordingSec}s` : `タップで送信 (${recordingSec}s)`)
+                    : isPreparing
+                    ? '準備中...'
+                    : 'タップして話す'}
                 </Text>
               </>
             )}

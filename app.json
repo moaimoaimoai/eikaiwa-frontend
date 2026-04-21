@@ -24,7 +24,8 @@
           "audio"
         ],
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "appleTeamId": "VF3F96V739"
     },
     "android": {
       "adaptiveIcon": {
@@ -46,7 +47,8 @@
         {
           "faceIDPermission": "Allow $(PRODUCT_NAME) to access your Face ID biometric data."
         }
-      ]
+      ],
+      "expo-font"
     ],
     "newArchEnabled": true,
     "experiments": {
