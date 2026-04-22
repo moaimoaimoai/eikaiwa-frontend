@@ -10,6 +10,7 @@ import api from '../../services/api';
 import { Card } from '../../components/ui/Card';
 import { Colors, FontSize, FontWeight, Spacing, BorderRadius } from '../../constants/theme';
 import { TrendData } from '../../types';
+import { PremiumGate } from '../../components/PremiumGate';
 
 const { width } = Dimensions.get('window');
 
@@ -48,9 +49,15 @@ export default function AnalysisScreen() {
   };
 
   if (loading) return (
-    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-      <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 80 }} />
-    </SafeAreaView>
+    <PremiumGate
+      featureName="傾向分析"
+      featureIcon="bar-chart"
+      featureDescription="週ごとの学習進捗・ミスの傾向・AIコーチからのアドバイスで弱点を可視化。継続的な改善をサポートします。"
+    >
+      <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+        <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 80 }} />
+      </SafeAreaView>
+    </PremiumGate>
   );
 
   const overview = data?.overview;
@@ -63,6 +70,11 @@ export default function AnalysisScreen() {
   const maxMinutes = Math.max(...dailyActivity.map(d => d.minutes), 1);
 
   return (
+    <PremiumGate
+      featureName="傾向分析"
+      featureIcon="bar-chart"
+      featureDescription="週ごとの学習進捗・ミスの傾向・AIコーチからのアドバイスで弱点を可視化。継続的な改善をサポートします。"
+    >
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       {/* ── グラデーションヘッダー ── */}
       <LinearGradient colors={['#059669', '#4F46E5']} style={styles.header} start={{x:0,y:0}} end={{x:1,y:1}}>
@@ -241,6 +253,7 @@ export default function AnalysisScreen() {
         )}
       </ScrollView>
     </SafeAreaView>
+    </PremiumGate>
   );
 }
 

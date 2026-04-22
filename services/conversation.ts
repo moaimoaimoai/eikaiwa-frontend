@@ -3,11 +3,19 @@ import * as SecureStore from 'expo-secure-store';
 import { ConversationSession, Message, Correction, ConversationSummary, TranslationResult, CoachingTip } from '../types';
 
 export const conversationService = {
-  async startSession(topic: string, avatarName: string, avatarAccent: string) {
+  async startSession(
+    topic: string,
+    avatarName: string,
+    avatarAccent: string,
+    dailyTopicLabel?: string,
+    dailyTopicHint?: string,
+  ) {
     const response = await api.post('/conversation/start/', {
       topic,
       avatar_name: avatarName,
       avatar_accent: avatarAccent,
+      ...(dailyTopicLabel ? { daily_topic_label: dailyTopicLabel } : {}),
+      ...(dailyTopicHint  ? { daily_topic_hint:  dailyTopicHint  } : {}),
     });
     return response.data as { session_id: number; message: Message };
   },

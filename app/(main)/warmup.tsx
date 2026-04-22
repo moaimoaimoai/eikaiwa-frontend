@@ -14,6 +14,7 @@ import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
 import { Colors, FontSize, FontWeight, Spacing, BorderRadius } from '../../constants/theme';
 import { Phrase } from '../../types';
+import { PremiumGate } from '../../components/PremiumGate';
 
 const { width } = Dimensions.get('window');
 
@@ -290,6 +291,11 @@ export default function WarmupScreen() {
 
 
   return (
+    <PremiumGate
+      featureName="フレーズ学習"
+      featureIcon="book"
+      featureDescription="ネイティブが実際に使う厳選フレーズを音声付きで学習。クイズ機能で繰り返しアウトプット練習できます。"
+    >
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       {/* ── グラデーションヘッダー ── */}
       <LinearGradient colors={['#0891B2', '#4F46E5']} style={styles.header} start={{x:0,y:0}} end={{x:1,y:1}}>
@@ -410,6 +416,7 @@ export default function WarmupScreen() {
         )}
       </ScrollView>
     </SafeAreaView>
+    </PremiumGate>
   );
 }
 

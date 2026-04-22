@@ -12,6 +12,7 @@ import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
 import { Colors, FontSize, FontWeight, Spacing, BorderRadius } from '../../constants/theme';
 import { Mistake, QuizQuestion, SavedPhrase } from '../../types';
+import { PremiumGate } from '../../components/PremiumGate';
 
 type Tab = 'list' | 'quiz' | 'phrases';
 
@@ -171,6 +172,11 @@ export default function VocabularyScreen() {
   const masteredCount = savedPhrases.filter(p => p.is_mastered).length;
 
   return (
+    <PremiumGate
+      featureName="単語帳"
+      featureIcon="library"
+      featureDescription="AI会話で出てきたミスや便利フレーズを自動収集。クイズで繰り返し練習して定着させよう。"
+    >
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       {/* ── グラデーションヘッダー ── */}
       <LinearGradient colors={['#D97706', '#7C3AED']} style={styles.header} start={{x:0,y:0}} end={{x:1,y:1}}>
@@ -561,6 +567,7 @@ export default function VocabularyScreen() {
         </ScrollView>
       )}
     </SafeAreaView>
+    </PremiumGate>
   );
 }
 

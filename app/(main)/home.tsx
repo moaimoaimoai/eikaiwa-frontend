@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  RefreshControl,
 } from 'react-native';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -9,13 +10,20 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuthStore } from '../../store/authStore';
 import { authService } from '../../services/auth';
 import { Card } from '../../components/ui/Card';
-import { Colors, FontSize, FontWeight, Spacing, BorderRadius, TOPICS } from '../../constants/theme';
+import {
+  Colors, FontSize, FontWeight, Spacing, BorderRadius,
+  TOPICS, getTodayTopic, DailyTopic,
+} from '../../constants/theme';
 
 
 export default function HomeScreen() {
   const { user, updateUser } = useAuthStore();
   const [stats, setStats] = useState<any>(null);
   const [refreshing, setRefreshing] = useState(false);
+
+  // 今日のトピック
+  const todayTopic: DailyTopic = getTodayTopic();
+
 
   const loadStats = async () => {
     try {
@@ -87,20 +95,90 @@ export default function HomeScreen() {
           ))}
         </View>
 
-        {/* ── 会話を始める ── */}
-        <TouchableOpacity onPress={() => router.push('/(main)/conversation')} activeOpacity={0.9} style={styles.startButtonWrap}>
-          <LinearGradient colors={['#4F46E5', '#7C3AED']} style={styles.startButton} start={{x:0,y:0}} end={{x:1,y:0}}>
-            <View style={styles.startButtonContent}>
-              <View>
-                <Text style={styles.startButtonTitle}>会話を始める</Text>
-                <Text style={styles.startButtonSub}>AIアバターと英語で話そう</Text>
-              </View>
-              <View style={styles.startButtonIcon}>
-                <Ionicons name="mic" size={32} color="#fff" />
-              </View>
+        {/* ── 今日のトピック ── */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <View style={styles.todayBadge}>
+              <Text style={styles.todayBadgeText}>TODAY</Text>
             </View>
-          </LinearGradient>
-        </TouchableOpacity>
+            <Text style={styles.sectionTitle}>今日のトピック</Text>
+          </View>
+
+          <TouchableOpacity
+            activeOpacity={0.88}
+            onPress={() => router.push({ pathname: '/(main)/conversation', params: { topic: todayTopic.parentTopic, dailyTopic: todayTopic.id } })}
+          >
+            <LinearGradient
+              colors={[todayTopic.color + 'DD', todayTopic.color + '99']}
+              style={styles.todayTopicCard}
+              start={{x:0,y:0}} end={{x:1,y:1}}
+            >
+              {/* 背景装飾 */}
+              <View style={styles.todayTopicBg}>
+                <Text style={styles.todayTopicBgEmoji}>{todayTopic.icon}</Text>
+              </View>
+
+              <View style={styles.todayTopicContent}>
+                <View style={styles.todayTopicIconWrap}>
+                  <Text style={styles.todayTopicEmoji}>{todayTopic.icon}</Text>
+                </View>
+                <View style={styles.todayTopicTexts}>
+                  <Text style={styles.todayTopicLabel}>{todayTopic.label}</Text>
+                  <Text style={styles.todayTopicHint}>{todayTopic.hint}</Text>
+                </View>
+              </View>
+
+              <View style={styles.todayTopicFooter}>
+                <View style={styles.todayTopicChip}>
+                  <Ionicons name="sparkles" size={11} color="#fff" />
+                  <Text style={styles.todayTopicChipText}>今日のおすすめ</Text>
+                </View>
+                <View style={styles.todayTopicStartBtn}>
+                  <Text style={styles.todayTopicStartText}>このトピックで話す</Text>
+                  <Ionicons name="arrow-forward" size={14} color="#fff" />
+                </View>
+              </View>
+            </LinearGradient>
+          </TouchableOpacity>
+        </View>
+
+        {/* ── OR 区切り ── */}
+        <View style={styles.orDivider}>
+          <View style={styles.orLine} />
+          <View style={styles.orBadge}>
+            <Text style={styles.orText}>または</Text>
+          </View>
+          <View style={styles.orLine} />
+        </View>
+
+        {/* ── 会話を始める（トピック自由） ── */}
+        <View style={styles.startSection}>
+          <TouchableOpacity onPress={() => router.push('/(main)/conversation')} activeOpacity={0.9}>
+            <LinearGradient
+              colors={['#4F46E5', '#7C3AED', '#9333EA']}
+              style={styles.startButton}
+              start={{x:0,y:0}} end={{x:1,y:1}}
+            >
+              <View style={styles.startButtonGloss} />
+              <View style={styles.startButtonInner}>
+                <View style={styles.startButtonLeft}>
+                  <View style={styles.startMicRing}>
+                    <View style={styles.startMicCore}>
+                      <Ionicons name="mic" size={28} color="#fff" />
+                    </View>
+                  </View>
+                </View>
+                <View style={styles.startButtonCenter}>
+                  <Text style={styles.startButtonTitle}>会話を始める</Text>
+                  <Text style={styles.startButtonSub}>トピック・アバターを自由に選んで話す</Text>
+                </View>
+                <View style={styles.startButtonArrow}>
+                  <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.8)" />
+                </View>
+              </View>
+            </LinearGradient>
+          </TouchableOpacity>
+        </View>
 
         {/* ── トピック ── */}
         <View style={styles.section}>
@@ -217,25 +295,134 @@ const styles = StyleSheet.create({
   statValue: { fontSize: FontSize.xl, fontWeight: FontWeight.extrabold },
   statLabel: { fontSize: FontSize.xs, color: Colors.textMuted },
 
-  /* Start button */
-  startButtonWrap: { marginHorizontal: Spacing.md, marginTop: Spacing.md },
-  startButton: { borderRadius: BorderRadius.xl, overflow: 'hidden' },
-  startButtonContent: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    padding: Spacing.xl,
-  },
-  startButtonTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.extrabold, color: '#fff' },
-  startButtonSub: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.8)', marginTop: 4 },
-  startButtonIcon: {
-    width: 64, height: 64, borderRadius: 32,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-
-  /* Sections */
+  /* Section */
   section: { padding: Spacing.md, gap: Spacing.md, marginTop: Spacing.sm },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+
+  /* TODAY badge */
+  todayBadge: {
+    backgroundColor: Colors.warning,
+    borderRadius: BorderRadius.sm,
+    paddingHorizontal: 7, paddingVertical: 3,
+  },
+  todayBadgeText: { fontSize: 9, fontWeight: FontWeight.extrabold, color: '#fff', letterSpacing: 1 },
+
+  /* 今日のトピックカード */
+  todayTopicCard: {
+    borderRadius: BorderRadius.xl,
+    padding: Spacing.lg,
+    gap: Spacing.md,
+    overflow: 'hidden',
+    minHeight: 140,
+    justifyContent: 'space-between',
+  },
+  todayTopicBg: {
+    position: 'absolute', right: -12, top: -12,
+    opacity: 0.15,
+  },
+  todayTopicBgEmoji: { fontSize: 100 },
+  todayTopicContent: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+  todayTopicIconWrap: {
+    width: 64, height: 64, borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  todayTopicEmoji: { fontSize: 34 },
+  todayTopicTexts: { flex: 1, gap: 6 },
+  todayTopicLabel: { fontSize: FontSize.xl, fontWeight: FontWeight.extrabold, color: '#fff', lineHeight: 26 },
+  todayTopicHint: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.8)', lineHeight: 18 },
+  todayTopicFooter: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+  },
+  todayTopicChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: BorderRadius.full,
+    paddingHorizontal: 10, paddingVertical: 4,
+  },
+  todayTopicChipText: { fontSize: FontSize.xs, color: '#fff', fontWeight: FontWeight.semibold },
+  todayTopicStartBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(0,0,0,0.25)',
+    borderRadius: BorderRadius.full,
+    paddingHorizontal: 14, paddingVertical: 6,
+  },
+  todayTopicStartText: { fontSize: FontSize.sm, color: '#fff', fontWeight: FontWeight.bold },
+
+  /* OR 区切り */
+  orDivider: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: Spacing.md, marginTop: Spacing.md,
+  },
+  orLine: { flex: 1, height: 1, backgroundColor: Colors.border },
+  orBadge: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 4,
+    backgroundColor: Colors.backgroundCard,
+    borderRadius: BorderRadius.full,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginHorizontal: Spacing.sm,
+  },
+  orText: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.medium },
+
+  /* 会話を始めるボタン */
+  startSection: { paddingHorizontal: Spacing.md, marginTop: Spacing.sm, gap: Spacing.sm },
+  startButton: {
+    borderRadius: BorderRadius.xl,
+    overflow: 'hidden',
+    shadowColor: '#4F46E5',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.5,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  startButtonGloss: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0,
+    height: '50%',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderTopLeftRadius: BorderRadius.xl,
+    borderTopRightRadius: BorderRadius.xl,
+  },
+  startButtonInner: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.xl,
+    gap: Spacing.md,
+  },
+  startButtonLeft: {},
+  startMicRing: {
+    width: 68, height: 68, borderRadius: 34,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 2, borderColor: 'rgba(255,255,255,0.3)',
+  },
+  startMicCore: {
+    width: 52, height: 52, borderRadius: 26,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  startButtonCenter: { flex: 1, gap: 4 },
+  startButtonTitle: { fontSize: FontSize.xxl, fontWeight: FontWeight.extrabold, color: '#fff' },
+  startButtonSub: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.75)' },
+  startButtonArrow: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+
+  /* クイックスタート */
+  quickStartRow: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+    backgroundColor: Colors.backgroundCard,
+    borderRadius: BorderRadius.lg,
+    paddingHorizontal: Spacing.md, paddingVertical: 12,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  quickStartEmoji: { fontSize: 18 },
+  quickStartText: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.medium },
 
   /* Topics */
   topicsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },

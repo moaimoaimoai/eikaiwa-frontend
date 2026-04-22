@@ -17,21 +17,39 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const [showCorrection, setShowCorrection] = useState(!!correction);
   const [showPhrases, setShowPhrases] = useState(false);
 
+  // is_unnatural_only: 黄色系、それ以外: 赤系
+  const isUnnaturalOnly = correction?.is_unnatural_only === true;
+  const accentColor = isUnnaturalOnly ? '#F59E0B' : Colors.error;
+
   const mistakeTypeColors: Record<string, string> = {
-    grammar: Colors.grammar,
-    vocabulary: Colors.vocabulary,
+    grammar:     Colors.grammar,
+    vocabulary:  Colors.vocabulary,
+    preposition: '#8B5CF6',
+    collocation: '#D97706',
+    unnatural:   '#F59E0B',
+    word_order:  '#06B6D4',
+    article:     '#EC4899',
     pronunciation: Colors.pronunciation,
-    spelling: Colors.spelling,
-    other: Colors.other,
+    spelling:    Colors.spelling,
+    other:       Colors.other,
   };
 
   const mistakeTypeLabels: Record<string, string> = {
-    grammar: '文法',
-    vocabulary: '語彙',
+    grammar:     '文法',
+    vocabulary:  '語彙',
+    preposition: '前置詞',
+    collocation: '語の組み合わせ',
+    unnatural:   '不自然な表現',
+    word_order:  '語順',
+    article:     '冠詞',
     pronunciation: '発音',
-    spelling: 'スペル',
-    other: 'その他',
+    spelling:    'スペル',
+    other:       'その他',
   };
+
+  const typeColor = correction
+    ? (mistakeTypeColors[correction.mistake_type] ?? Colors.error)
+    : Colors.error;
 
   return (
     <View style={[styles.container, isUser ? styles.userContainer : styles.aiContainer]}>
@@ -49,22 +67,50 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
           </Text>
           {message.has_mistake && (
             <View style={styles.mistakeIndicator}>
-              <Ionicons name="alert-circle" size={14} color={Colors.error} />
-              <Text style={styles.mistakeIndicatorText}>ミスあり</Text>
+              <Ionicons
+                name={isUnnaturalOnly ? 'alert-circle-outline' : 'alert-circle'}
+                size={14}
+                color={isUnnaturalOnly ? Colors.warning : Colors.error}
+              />
+              <Text style={[styles.mistakeIndicatorText, isUnnaturalOnly && { color: Colors.warning }]}>
+                {isUnnaturalOnly ? '不自然な表現あり' : 'ミスあり'}
+              </Text>
             </View>
           )}
         </View>
 
         {/* Correction card */}
         {correction && showCorrection && (
-          <View style={[styles.correctionCard, { borderLeftColor: mistakeTypeColors[correction.mistake_type] || Colors.error }]}>
+          <View style={[
+            styles.correctionCard,
+            { borderLeftColor: typeColor, backgroundColor: typeColor + '10' },
+          ]}>
             {/* Header */}
             <View style={styles.correctionHeader}>
-              <View style={[styles.correctionBadge, { backgroundColor: (mistakeTypeColors[correction.mistake_type] || Colors.error) + '25' }]}>
-                <Ionicons name="construct" size={11} color={mistakeTypeColors[correction.mistake_type] || Colors.error} />
-                <Text style={[styles.correctionBadgeText, { color: mistakeTypeColors[correction.mistake_type] || Colors.error }]}>
-                  {mistakeTypeLabels[correction.mistake_type] || 'その他'}
-                </Text>
+              <View style={styles.correctionHeaderLeft}>
+                {/* ミス種別バッジ */}
+                <View style={[styles.correctionBadge, { backgroundColor: typeColor + '25' }]}>
+                  <Ionicons
+                    name={isUnnaturalOnly ? 'swap-horizontal' : 'construct'}
+                    size={11}
+                    color={typeColor}
+                  />
+                  <Text style={[styles.correctionBadgeText, { color: typeColor }]}>
+                    {mistakeTypeLabels[correction.mistake_type] ?? 'その他'}
+                  </Text>
+                </View>
+                {/* 「不自然」か「誤り」かのラベル */}
+                <View style={[
+                  styles.severityBadge,
+                  { backgroundColor: isUnnaturalOnly ? '#F59E0B20' : '#EF444420' }
+                ]}>
+                  <Text style={[
+                    styles.severityText,
+                    { color: isUnnaturalOnly ? '#F59E0B' : '#EF4444' }
+                  ]}>
+                    {isUnnaturalOnly ? '💬 不自然' : '🔴 誤り'}
+                  </Text>
+                </View>
               </View>
               <TouchableOpacity onPress={() => setShowCorrection(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <Ionicons name="close" size={16} color={Colors.textMuted} />
@@ -72,21 +118,33 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             </View>
 
             {/* Original → Corrected */}
-            <View style={styles.correctionRow}>
-              <Text style={styles.correctionLabel}>❌</Text>
-              <Text style={styles.originalText}>{correction.original}</Text>
-            </View>
-            <View style={styles.correctionRow}>
-              <Text style={styles.correctionLabel}>✅</Text>
-              <Text style={styles.correctedText}>{correction.corrected}</Text>
+            <View style={styles.compareBlock}>
+              <View style={styles.compareRow}>
+                <View style={[styles.compareIcon, { backgroundColor: '#EF444420' }]}>
+                  <Text style={{ fontSize: 11 }}>✗</Text>
+                </View>
+                <Text style={styles.originalText}>{correction.original}</Text>
+              </View>
+              <View style={styles.compareArrow}>
+                <Ionicons name="arrow-down" size={14} color={Colors.textMuted} />
+              </View>
+              <View style={styles.compareRow}>
+                <View style={[styles.compareIcon, { backgroundColor: '#22C55E20' }]}>
+                  <Text style={{ fontSize: 11 }}>✓</Text>
+                </View>
+                <Text style={styles.correctedText}>{correction.corrected}</Text>
+              </View>
             </View>
 
             {/* Explanation */}
             {correction.explanation ? (
-              <Text style={styles.explanationText}>{correction.explanation}</Text>
+              <View style={styles.explanationBlock}>
+                <Ionicons name="information-circle-outline" size={13} color={Colors.textMuted} />
+                <Text style={styles.explanationText}>{correction.explanation}</Text>
+              </View>
             ) : null}
 
-            {/* ── Advice ── */}
+            {/* Advice */}
             {correction.advice_ja ? (
               <View style={styles.adviceRow}>
                 <Ionicons name="bulb" size={13} color={Colors.warning} />
@@ -94,7 +152,18 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
               </View>
             ) : null}
 
-            {/* ── Useful Phrases ── */}
+            {/* Level-up（より上級の表現） */}
+            {correction.level_up ? (
+              <View style={styles.levelUpRow}>
+                <View style={styles.levelUpHeader}>
+                  <Ionicons name="rocket" size={12} color='#A78BFA' />
+                  <Text style={styles.levelUpLabel}>レベルアップ表現</Text>
+                </View>
+                <Text style={styles.levelUpText}>"{correction.level_up}"</Text>
+              </View>
+            ) : null}
+
+            {/* Useful Phrases */}
             {correction.useful_phrases && correction.useful_phrases.length > 0 && (
               <View style={styles.phrasesSection}>
                 <TouchableOpacity
@@ -103,7 +172,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                   activeOpacity={0.7}
                 >
                   <Ionicons name="chatbubbles" size={13} color={Colors.info} />
-                  <Text style={styles.phrasesToggleText}>便利フレーズ {correction.useful_phrases.length}個</Text>
+                  <Text style={styles.phrasesToggleText}>
+                    関連フレーズ {correction.useful_phrases.length}個
+                  </Text>
                   <Ionicons
                     name={showPhrases ? 'chevron-up' : 'chevron-down'}
                     size={13}
@@ -137,167 +208,130 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     gap: 8,
   },
-  userContainer: {
-    flexDirection: 'row-reverse',
-  },
-  aiContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-  },
+  userContainer: { flexDirection: 'row-reverse' },
+  aiContainer: { flexDirection: 'row', alignItems: 'flex-end' },
   avatarSmall: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 36, height: 36, borderRadius: 18,
     backgroundColor: Colors.backgroundCard,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: 'center', justifyContent: 'center',
     flexShrink: 0,
   },
-  bubbleWrapper: {
-    maxWidth: '82%',
-    gap: 6,
-  },
+  bubbleWrapper: { maxWidth: '82%', gap: 6 },
   userBubbleWrapper: { alignItems: 'flex-end' },
-  aiBubbleWrapper: { alignItems: 'flex-start' },
-  bubble: {
-    borderRadius: BorderRadius.lg,
-    padding: Spacing.md,
-    gap: 4,
-  },
-  userBubble: {
-    backgroundColor: Colors.primary,
-    borderBottomRightRadius: 4,
-  },
-  aiBubble: {
-    backgroundColor: Colors.backgroundCard,
-    borderBottomLeftRadius: 4,
-  },
-  messageText: {
-    fontSize: FontSize.md,
-    lineHeight: 22,
-  },
-  userText: {
-    color: Colors.textOnPrimary,
-  },
-  aiText: {
-    color: Colors.textPrimary,
-  },
+  aiBubbleWrapper:  { alignItems: 'flex-start' },
+  bubble: { borderRadius: BorderRadius.lg, padding: Spacing.md, gap: 4 },
+  userBubble: { backgroundColor: Colors.primary, borderBottomRightRadius: 4 },
+  aiBubble:   { backgroundColor: Colors.backgroundCard, borderBottomLeftRadius: 4 },
+  messageText: { fontSize: FontSize.md, lineHeight: 22 },
+  userText: { color: Colors.textOnPrimary },
+  aiText:   { color: Colors.textPrimary },
+
   mistakeIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 4,
+    flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4,
   },
-  mistakeIndicatorText: {
-    fontSize: FontSize.xs,
-    color: Colors.error,
-  },
+  mistakeIndicatorText: { fontSize: FontSize.xs, color: Colors.error },
 
   /* Correction card */
   correctionCard: {
-    backgroundColor: 'rgba(239,68,68,0.07)',
     borderRadius: BorderRadius.md,
     padding: Spacing.sm,
     borderLeftWidth: 3,
-    gap: 7,
-  },
-  correctionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  correctionBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    borderRadius: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  correctionBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-  },
-  correctionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: 8,
   },
-  correctionLabel: {
-    fontSize: 14,
+  correctionHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
   },
+  correctionHeaderLeft: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap', flex: 1,
+  },
+  correctionBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3,
+  },
+  correctionBadgeText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
+  severityBadge: {
+    borderRadius: 4, paddingHorizontal: 7, paddingVertical: 3,
+  },
+  severityText: { fontSize: 10, fontWeight: FontWeight.bold },
+
+  /* Compare block */
+  compareBlock: {
+    backgroundColor: Colors.backgroundInput,
+    borderRadius: BorderRadius.sm,
+    padding: 10,
+    gap: 4,
+  },
+  compareRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+  },
+  compareIcon: {
+    width: 20, height: 20, borderRadius: 4,
+    alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0,
+  },
+  compareArrow: { paddingLeft: 4 },
   originalText: {
-    color: Colors.error,
-    fontSize: FontSize.sm,
-    textDecorationLine: 'line-through',
-    flex: 1,
+    color: Colors.error, fontSize: FontSize.sm,
+    textDecorationLine: 'line-through', flex: 1,
   },
   correctedText: {
-    color: Colors.success,
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    flex: 1,
+    color: Colors.success, fontSize: FontSize.sm,
+    fontWeight: FontWeight.bold, flex: 1,
+  },
+
+  /* Explanation */
+  explanationBlock: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 5,
   },
   explanationText: {
-    color: Colors.textSecondary,
-    fontSize: FontSize.xs,
-    lineHeight: 18,
+    flex: 1, color: Colors.textSecondary, fontSize: FontSize.xs, lineHeight: 18,
   },
 
   /* Advice */
   adviceRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 6,
+    flexDirection: 'row', alignItems: 'flex-start', gap: 6,
     backgroundColor: Colors.warning + '15',
-    borderRadius: BorderRadius.sm,
-    padding: 8,
-    marginTop: 2,
+    borderRadius: BorderRadius.sm, padding: 8,
   },
   adviceText: {
-    flex: 1,
-    fontSize: FontSize.xs,
-    color: Colors.textSecondary,
-    lineHeight: 18,
+    flex: 1, fontSize: FontSize.xs, color: Colors.textSecondary, lineHeight: 18,
+  },
+
+  /* Level-up */
+  levelUpRow: {
+    backgroundColor: '#A78BFA18',
+    borderRadius: BorderRadius.sm,
+    padding: 8, gap: 4,
+    borderWidth: 1, borderColor: '#A78BFA30',
+  },
+  levelUpHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+  },
+  levelUpLabel: {
+    fontSize: 10, fontWeight: FontWeight.bold, color: '#A78BFA',
+  },
+  levelUpText: {
+    fontSize: FontSize.sm, color: '#C4B5FD', fontWeight: FontWeight.semibold,
   },
 
   /* Useful phrases */
-  phrasesSection: {
-    marginTop: 2,
-  },
+  phrasesSection: { marginTop: 2 },
   phrasesToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
+    flexDirection: 'row', alignItems: 'center', gap: 5,
     backgroundColor: Colors.info + '15',
-    borderRadius: BorderRadius.sm,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
+    borderRadius: BorderRadius.sm, paddingHorizontal: 10, paddingVertical: 7,
   },
   phrasesToggleText: {
-    flex: 1,
-    fontSize: FontSize.xs,
-    color: Colors.info,
-    fontWeight: FontWeight.semibold,
+    flex: 1, fontSize: FontSize.xs, color: Colors.info, fontWeight: FontWeight.semibold,
   },
-  phrasesList: {
-    marginTop: 4,
-    gap: 5,
-  },
+  phrasesList: { marginTop: 4, gap: 5 },
   phraseItem: {
     backgroundColor: Colors.backgroundInput,
     borderRadius: BorderRadius.sm,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    gap: 2,
+    paddingHorizontal: 10, paddingVertical: 7, gap: 2,
   },
   phraseEnglish: {
-    fontSize: FontSize.sm,
-    color: Colors.textPrimary,
-    fontWeight: FontWeight.medium,
+    fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium,
   },
-  phraseJapanese: {
-    fontSize: FontSize.xs,
-    color: Colors.textMuted,
-  },
+  phraseJapanese: { fontSize: FontSize.xs, color: Colors.textMuted },
 });

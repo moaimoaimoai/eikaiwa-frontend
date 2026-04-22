@@ -40,6 +40,7 @@ export const NOTIFICATION_IDS = {
   DAILY_REMINDER: 'daily-reminder',
   STREAK_WARNING: 'streak-warning',
   WEEKLY_REPORT: 'weekly-report',
+  DAILY_TOPIC: 'daily-topic',
 } as const;
 
 // 学習リマインダーのメッセージ候補（ランダムで選ぶ）
@@ -200,6 +201,47 @@ export async function sendAchievementNotification(totalConversations: number): P
     },
     trigger: null,
   });
+}
+
+/**
+ * 今日のトピック通知をスケジュールする（毎朝 hour:minute）
+ * @param topicLabel トピック名 (例: "空港でチェックイン")
+ * @param topicIcon  絵文字アイコン
+ * @param hour       通知時刻（時）
+ * @param minute     通知時刻（分）
+ */
+export async function scheduleDailyTopicNotification(
+  topicLabel: string,
+  topicIcon: string,
+  hour: number = 8,
+  minute: number = 0,
+): Promise<void> {
+  const N = getNotifications();
+  if (!N) return;
+
+  await cancelDailyTopicNotification();
+
+  await N.scheduleNotificationAsync({
+    identifier: NOTIFICATION_IDS.DAILY_TOPIC,
+    content: {
+      title: `${topicIcon} 今日のトピック`,
+      body: `「${topicLabel}」で英会話を練習しましょう！`,
+      sound: true,
+      data: { type: 'daily_topic', topicLabel },
+    },
+    trigger: {
+      type: N.SchedulableTriggerInputTypes.DAILY,
+      hour,
+      minute,
+    },
+  });
+}
+
+/** 今日のトピック通知をキャンセルする */
+export async function cancelDailyTopicNotification(): Promise<void> {
+  const N = getNotifications();
+  if (!N) return;
+  await N.cancelScheduledNotificationAsync(NOTIFICATION_IDS.DAILY_TOPIC).catch(() => {});
 }
 
 /** すべての通知をキャンセルする */

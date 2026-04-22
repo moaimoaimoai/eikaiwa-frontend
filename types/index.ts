@@ -62,8 +62,12 @@ export interface Correction {
   original: string;
   corrected: string;
   explanation: string;
-  mistake_type: 'grammar' | 'vocabulary' | 'pronunciation' | 'spelling' | 'other';
+  mistake_type: 'grammar' | 'vocabulary' | 'preposition' | 'collocation' | 'unnatural' | 'word_order' | 'article' | 'pronunciation' | 'spelling' | 'other';
+  /** true = 文法的には正しいが不自然・ネイティブらしくない表現 */
+  is_unnatural_only?: boolean;
   advice_ja?: string;
+  /** より上級・洗練された表現の提案 */
+  level_up?: string;
   useful_phrases?: UsefulPhrase[];
 }
 

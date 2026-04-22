@@ -18,7 +18,7 @@ import { sendAchievementNotification } from '../../services/notifications';
 import { AvatarDisplay } from '../../components/AvatarDisplay';
 import { MessageBubble } from '../../components/MessageBubble';
 import { Button } from '../../components/ui/Button';
-import { Colors, FontSize, FontWeight, Spacing, BorderRadius, AVATARS, TOPICS } from '../../constants/theme';
+import { Colors, FontSize, FontWeight, Spacing, BorderRadius, AVATARS, TOPICS, DAILY_TOPICS } from '../../constants/theme';
 import { Message, Correction, TranslationResult, CoachingTip } from '../../types';
 
 type Mode = 'setup' | 'loading' | 'chat' | 'ending' | 'summary';
@@ -105,7 +105,7 @@ const MAX_TURNS = 10;
 const WARN_AT_REMAINING = 3;
 
 export default function ConversationScreen() {
-  const params = useLocalSearchParams<{ topic?: string }>();
+  const params = useLocalSearchParams<{ topic?: string; dailyTopic?: string }>();
   const { user, updateUser } = useAuthStore();
   const { achievementEnabled } = useNotificationStore();
   const {
@@ -177,8 +177,18 @@ export default function ConversationScreen() {
 
   const suggestions = ["Tell me more!", "I see.", "That's interesting!", "Could you explain?", "I agree!"];
 
+  // 今日のトピック情報（params.dailyTopic が渡された場合に取得）
+  const dailyTopicBase = params.dailyTopic
+    ? DAILY_TOPICS.find(t => t.id === params.dailyTopic) ?? null
+    : null;
+  // ユーザーが「外す」ボタンを押したら null にする
+  const [dailyTopicActive, setDailyTopicActive] = useState(true);
+  const dailyTopicInfo = dailyTopicActive ? dailyTopicBase : null;
+
   useEffect(() => {
-    if (params.topic) setTopic(params.topic);
+    // params.topic がない場合は必ず 'free' にリセットする
+    // （前回のデイリートピックや別トピックが残らないようにする）
+    setTopic(params.topic || 'free');
     // マウント時にマイク権限を事前チェック
     checkMicPermission();
     return () => {
@@ -292,7 +302,13 @@ export default function ConversationScreen() {
     setTopic(topic);
     setMode('loading'); // ローディング画面へ
     try {
-      const result = await conversationService.startSession(topic, avatarName, avatarAccent);
+      const result = await conversationService.startSession(
+        topic,
+        avatarName,
+        avatarAccent,
+        dailyTopicInfo?.label,
+        dailyTopicInfo?.hint,
+      );
 
       // 月次上限エラー
       if ((result as any).error === 'monthly_limit_reached') {
@@ -862,6 +878,63 @@ export default function ConversationScreen() {
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         <ScrollView contentContainerStyle={styles.setupContent}>
           <Text style={styles.setupTitle}>会話の設定</Text>
+
+          {/* 今日のトピックバナー */}
+          {dailyTopicBase && (
+            dailyTopicInfo ? (
+              /* アクティブ状態: グラデーションカード＋右上に「外す」ボタン */
+              <View style={styles.dailyTopicBanner}>
+                <TouchableOpacity
+                  activeOpacity={0.9}
+                  onPress={startSession}
+                  style={styles.dailyTopicBannerTouchable}
+                >
+                  <LinearGradient
+                    colors={[dailyTopicInfo.color + 'EE', dailyTopicInfo.color + 'AA']}
+                    style={styles.dailyTopicBannerGrad}
+                    start={{x:0,y:0}} end={{x:1,y:1}}
+                  >
+                    <View style={styles.dailyTopicBannerLeft}>
+                      <View style={styles.dailyTopicBannerBadge}>
+                        <Text style={styles.dailyTopicBannerBadgeText}>TODAY</Text>
+                      </View>
+                      <Text style={styles.dailyTopicBannerEmoji}>{dailyTopicInfo.icon}</Text>
+                      <View style={styles.dailyTopicBannerTexts}>
+                        <Text style={styles.dailyTopicBannerLabel}>{dailyTopicInfo.label}</Text>
+                        <Text style={styles.dailyTopicBannerHint}>{dailyTopicInfo.hint}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.dailyTopicBannerArrow}>
+                      <Ionicons name="flash" size={18} color="#fff" />
+                      <Text style={styles.dailyTopicBannerArrowText}>今すぐ始める</Text>
+                    </View>
+                  </LinearGradient>
+                </TouchableOpacity>
+
+                {/* 「外す」ボタン：右上に絶対配置 */}
+                <TouchableOpacity
+                  style={styles.dailyTopicDismiss}
+                  onPress={() => setDailyTopicActive(false)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close-circle" size={22} color="rgba(255,255,255,0.75)" />
+                </TouchableOpacity>
+              </View>
+            ) : (
+              /* 解除済み状態: 薄いチップで再設定できる */
+              <TouchableOpacity
+                style={styles.dailyTopicRestoreRow}
+                onPress={() => setDailyTopicActive(true)}
+                activeOpacity={0.75}
+              >
+                <Text style={styles.dailyTopicRestoreEmoji}>{dailyTopicBase.icon}</Text>
+                <Text style={styles.dailyTopicRestoreText}>
+                  今日のトピック「{dailyTopicBase.label}」に戻す
+                </Text>
+                <Ionicons name="refresh" size={14} color={Colors.primary} />
+              </TouchableOpacity>
+            )
+          )}
 
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>AIアバターを選ぶ</Text>
@@ -1495,6 +1568,54 @@ const styles = StyleSheet.create({
   setupTitle: { fontSize: FontSize.xxl, fontWeight: FontWeight.extrabold, color: Colors.textPrimary },
   section: { gap: Spacing.sm },
   sectionLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textSecondary },
+
+  /* 今日のトピックバナー（セットアップ画面） */
+  dailyTopicBanner: {
+    position: 'relative',   // 「外す」ボタンの絶対配置基準
+  },
+  dailyTopicBannerTouchable: {},
+  dailyTopicBannerGrad: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    padding: Spacing.md, gap: Spacing.sm,
+    borderRadius: BorderRadius.xl,
+  },
+  dailyTopicBannerLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  dailyTopicBannerBadge: {
+    backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 6,
+    paddingHorizontal: 6, paddingVertical: 2,
+  },
+  dailyTopicBannerBadgeText: { fontSize: 9, fontWeight: FontWeight.extrabold, color: '#fff', letterSpacing: 1 },
+  dailyTopicBannerEmoji: { fontSize: 26 },
+  dailyTopicBannerTexts: { flex: 1, gap: 2 },
+  dailyTopicBannerLabel: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: '#fff' },
+  dailyTopicBannerHint: { fontSize: FontSize.xs, color: 'rgba(255,255,255,0.85)', lineHeight: 16 },
+  dailyTopicBannerArrow: {
+    flexDirection: 'column', alignItems: 'center', gap: 2,
+    backgroundColor: 'rgba(0,0,0,0.25)', borderRadius: BorderRadius.md,
+    paddingHorizontal: 10, paddingVertical: 8,
+  },
+  dailyTopicBannerArrowText: { fontSize: FontSize.xs, color: '#fff', fontWeight: FontWeight.bold },
+  /* 「外す」ボタン：バナー右上に絶対配置 */
+  dailyTopicDismiss: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  /* 解除後の「戻す」行 */
+  dailyTopicRestoreRow: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+    backgroundColor: Colors.backgroundCard,
+    borderRadius: BorderRadius.lg,
+    paddingHorizontal: Spacing.md, paddingVertical: 12,
+    borderWidth: 1, borderColor: Colors.border,
+    borderStyle: 'dashed',
+  },
+  dailyTopicRestoreEmoji: { fontSize: 18 },
+  dailyTopicRestoreText: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary },
   avatarGrid: { flexDirection: 'row', gap: Spacing.sm },
   avatarCard: {
     flex: 1, alignItems: 'center', gap: 4, padding: Spacing.sm,

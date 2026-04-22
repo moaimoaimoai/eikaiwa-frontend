@@ -29,11 +29,16 @@ export default function SettingsScreen() {
     streakWarningEnabled,
     weeklyReportEnabled,
     achievementEnabled,
+    dailyTopicEnabled,
+    dailyTopicHour,
+    dailyTopicMinute,
     setReminderEnabled,
     setReminderTime,
     setStreakWarningEnabled,
     setWeeklyReportEnabled,
     setAchievementEnabled,
+    setDailyTopicEnabled,
+    setDailyTopicTime,
   } = useNotificationStore();
 
   const [displayName, setDisplayName] = useState(user?.display_name ?? '');
@@ -387,6 +392,34 @@ export default function SettingsScreen() {
               />
             </View>
 
+            {/* 今日のトピック通知 */}
+            <View style={[styles.row, { borderBottomWidth: 0 }]}>
+              <View style={[styles.rowIcon, { backgroundColor: '#4F46E520' }]}>
+                <Text style={{ fontSize: 18 }}>📅</Text>
+              </View>
+              <View style={styles.rowBody}>
+                <Text style={styles.rowLabel}>今日のトピック通知</Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    setTempHour(dailyTopicHour);
+                    setTempMinute(dailyTopicMinute);
+                    setTimePickerVisible(true);
+                  }}
+                  disabled={!dailyTopicEnabled}
+                >
+                  <Text style={[styles.rowValue, { fontSize: FontSize.sm, color: dailyTopicEnabled ? Colors.primary : Colors.textMuted }]}>
+                    毎朝 {formatTime(dailyTopicHour, dailyTopicMinute)} — 今日のおすすめトピックをお知らせ
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              <Switch
+                value={dailyTopicEnabled}
+                onValueChange={setDailyTopicEnabled}
+                trackColor={{ false: Colors.backgroundInput, true: Colors.primary }}
+                thumbColor="#fff"
+              />
+            </View>
+
           </View>
         </View>
 
@@ -523,7 +556,7 @@ export default function SettingsScreen() {
                   <Ionicons name="star" size={18} color={Colors.gold} />
                   <View style={styles.upgradeTextWrap}>
                     <Text style={styles.upgradeTitle}>プレミアムにアップグレード</Text>
-                    <Text style={styles.upgradeDesc}>月$10 · 100回/月 · 全機能使い放題</Text>
+                    <Text style={styles.upgradeDesc}>月額 ¥980（税込） · 100回/月 · 全機能使い放題</Text>
                   </View>
                   <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.7)" />
                 </LinearGradient>
