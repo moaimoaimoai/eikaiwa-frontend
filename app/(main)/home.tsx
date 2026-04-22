@@ -15,10 +15,17 @@ import {
   TOPICS, getTodayTopic, DailyTopic,
 } from '../../constants/theme';
 
+interface StatsData {
+  total_conversations: number;
+  total_minutes: number;
+  mastered_count: number;
+  mistake_count: number;
+}
 
 export default function HomeScreen() {
   const { user, updateUser } = useAuthStore();
-  const [stats, setStats] = useState<any>(null);
+  const [stats, setStats] = useState<StatsData | null>(null);
+  const [statsError, setStatsError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   // 今日のトピック
@@ -29,7 +36,10 @@ export default function HomeScreen() {
     try {
       const data = await authService.getStats();
       setStats(data);
-    } catch {}
+      setStatsError(false);
+    } catch {
+      setStatsError(true);
+    }
   };
 
   useEffect(() => { loadStats(); }, []);
@@ -63,7 +73,12 @@ export default function HomeScreen() {
               <Text style={styles.greeting}>{greeting()} 👋</Text>
               <Text style={styles.userName}>{user?.display_name || user?.username || 'ユーザー'}さん</Text>
             </View>
-            <TouchableOpacity style={styles.avatarButton} onPress={() => router.push('/(main)/settings')}>
+            <TouchableOpacity
+              style={styles.avatarButton}
+              onPress={() => router.push('/(main)/settings')}
+              accessibilityLabel="設定を開く"
+              accessibilityRole="button"
+            >
               <Text style={styles.avatarButtonText}>{levelEmoji}</Text>
             </TouchableOpacity>
           </View>
@@ -107,6 +122,8 @@ export default function HomeScreen() {
           <TouchableOpacity
             activeOpacity={0.88}
             onPress={() => router.push({ pathname: '/(main)/conversation', params: { topic: todayTopic.parentTopic, dailyTopic: todayTopic.id } })}
+            accessibilityLabel={`今日のトピック: ${todayTopic.label}で話す`}
+            accessibilityRole="button"
           >
             <LinearGradient
               colors={[todayTopic.color + 'DD', todayTopic.color + '99']}
@@ -153,7 +170,12 @@ export default function HomeScreen() {
 
         {/* ── 会話を始める（トピック自由） ── */}
         <View style={styles.startSection}>
-          <TouchableOpacity onPress={() => router.push('/(main)/conversation')} activeOpacity={0.9}>
+          <TouchableOpacity
+            onPress={() => router.push('/(main)/conversation')}
+            activeOpacity={0.9}
+            accessibilityLabel="会話を始める"
+            accessibilityRole="button"
+          >
             <LinearGradient
               colors={['#4F46E5', '#7C3AED', '#9333EA']}
               style={styles.startButton}
@@ -236,7 +258,13 @@ export default function HomeScreen() {
 
         {/* ── ミス復習バナー ── */}
         {stats && stats.mistake_count > 0 && (
-          <TouchableOpacity onPress={() => router.push('/(main)/vocabulary')} activeOpacity={0.9} style={styles.mistakesBannerWrap}>
+          <TouchableOpacity
+            onPress={() => router.push('/(main)/vocabulary')}
+            activeOpacity={0.9}
+            style={styles.mistakesBannerWrap}
+            accessibilityLabel={`${Math.max(0, stats.mistake_count - stats.mastered_count)}個のミスを復習する`}
+            accessibilityRole="button"
+          >
             <Card style={styles.mistakesBanner} variant="outlined">
               <View style={styles.mistakesBannerContent}>
                 <View style={styles.mistakesIconWrap}>
@@ -244,7 +272,7 @@ export default function HomeScreen() {
                 </View>
                 <View style={styles.mistakesText}>
                   <Text style={styles.mistakesTitle}>
-                    {stats.mistake_count - stats.mastered_count}個のミスを復習しよう
+                    {Math.max(0, stats.mistake_count - stats.mastered_count)}個のミスを復習しよう
                   </Text>
                   <Text style={styles.mistakesDesc}>単語帳でクイズに挑戦！</Text>
                 </View>
@@ -353,7 +381,7 @@ const styles = StyleSheet.create({
   /* OR 区切り */
   orDivider: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: Spacing.md, marginTop: Spacing.md,
+    paddingHorizontal: Spacing.md, marginBottom: Spacing.md,
   },
   orLine: { flex: 1, height: 1, backgroundColor: Colors.border },
   orBadge: {
@@ -368,7 +396,7 @@ const styles = StyleSheet.create({
   orText: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.medium },
 
   /* 会話を始めるボタン */
-  startSection: { paddingHorizontal: Spacing.md, marginTop: Spacing.sm, gap: Spacing.sm },
+  startSection: { paddingHorizontal: Spacing.md, gap: Spacing.sm },
   startButton: {
     borderRadius: BorderRadius.xl,
     overflow: 'hidden',

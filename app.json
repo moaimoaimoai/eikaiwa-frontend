@@ -15,15 +15,25 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.simple.eikaiwaai",
-      "buildNumber": "1",
+      "buildNumber": "2",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "英会話練習のために音声入力が必要です",
         "NSSpeechRecognitionUsageDescription": "音声を文字に変換するために使用します",
+        "NSCameraUsageDescription": "プロフィール画像の設定に使用します",
         "UIBackgroundModes": [
           "audio",
           "fetch"
         ],
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "LSApplicationQueriesSchemes": []
+      },
+      "privacyManifests": {
+        "NSPrivacyAccessedAPITypes": [
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryUserDefaults",
+            "NSPrivacyAccessedAPITypeReasons": ["CA92.1"]
+          }
+        ]
       },
       "appleTeamId": "VF3F96V739"
     },

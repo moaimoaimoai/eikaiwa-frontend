@@ -30,6 +30,7 @@ const SUGGESTION_ICONS: Record<string, { icon: keyof typeof Ionicons.glyphMap; c
 export default function AnalysisScreen() {
   const [data, setData] = useState<TrendData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [period, setPeriod] = useState(14);
 
@@ -37,7 +38,10 @@ export default function AnalysisScreen() {
     try {
       const response = await api.get('/analysis/trends/', { params: { days: period } });
       setData(response.data);
-    } catch {}
+      setLoadError(false);
+    } catch {
+      setLoadError(true);
+    }
   };
 
   useEffect(() => { loadData().finally(() => setLoading(false)); }, [period]);
@@ -241,8 +245,27 @@ export default function AnalysisScreen() {
           </View>
         )}
 
+        {/* ── Error state ── */}
+        {loadError && (
+          <View style={styles.emptyState}>
+            <View style={[styles.emptyIconWrap, { backgroundColor: Colors.error + '20' }]}>
+              <Ionicons name="wifi-outline" size={40} color={Colors.error} />
+            </View>
+            <Text style={styles.emptyTitle}>データを読み込めませんでした</Text>
+            <Text style={styles.emptyDesc}>インターネット接続を確認して、もう一度お試しください</Text>
+            <TouchableOpacity
+              onPress={() => { setLoadError(false); loadData(); }}
+              style={styles.retryButton}
+              accessibilityLabel="再読み込み"
+              accessibilityRole="button"
+            >
+              <Text style={styles.retryButtonText}>再試行</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* ── Empty state ── */}
-        {!overview?.total_sessions && (
+        {!loadError && !overview?.total_sessions && (
           <View style={styles.emptyState}>
             <View style={styles.emptyIconWrap}>
               <Ionicons name="leaf" size={40} color={Colors.success} />
@@ -330,4 +353,13 @@ const styles = StyleSheet.create({
   emptyIconWrap: { width: 80, height: 80, borderRadius: 40, backgroundColor: Colors.success + '20', alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary },
   emptyDesc: { fontSize: FontSize.md, color: Colors.textSecondary, textAlign: 'center', lineHeight: 22 },
+  retryButton: {
+    backgroundColor: Colors.primary + '20',
+    borderRadius: BorderRadius.lg,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.primary + '40',
+  },
+  retryButtonText: { fontSize: FontSize.md, color: Colors.primary, fontWeight: FontWeight.semibold },
 });

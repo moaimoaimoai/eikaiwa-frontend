@@ -8,7 +8,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Audio } from 'expo-av';
-import { phrasesService, AIPhrase, AIWord } from '../../services/phrases';
+import { phrasesService, AIPhrase, AIWord, AIWarmupResult } from '../../services/phrases';
 import { conversationService } from '../../services/conversation';
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
@@ -423,12 +423,34 @@ export default function WarmupScreen() {
 // ─────────────────────────────────────────────
 // PhrasesTab
 // ─────────────────────────────────────────────
+interface PhrasesTabProps {
+  displayPhrases: DisplayPhrase[];
+  currentIndex: number;
+  showJapanese: boolean;
+  speakingId: number | null;
+  speakingHash: string | null;
+  flipMode: 'en-ja' | 'ja-en';
+  onFlipMode: () => void;
+  onToggleJapanese: () => void;
+  onSpeak: (phrase: DisplayPhrase) => void;
+  onNext: () => void;
+  onPrev: () => void;
+  aiPhrases: AIPhrase[];
+  aiLoading: boolean;
+  remainingToday: number | null;
+  dailyLimit: number;
+  limitReached: boolean;
+  onReloadAI: () => void;
+  reviewedToday: DisplayPhrase[];
+  onSpeakAI: (phrase: AIPhrase) => void;
+}
+
 function PhrasesTab({
   displayPhrases, currentIndex, showJapanese, speakingId, speakingHash,
   flipMode, onFlipMode, onToggleJapanese, onSpeak, onNext, onPrev,
   aiPhrases, aiLoading, remainingToday, dailyLimit, limitReached,
   onReloadAI, reviewedToday, onSpeakAI,
-}: any) {
+}: PhrasesTabProps) {
   const current: DisplayPhrase | undefined = displayPhrases[currentIndex];
   const isJaFirst = flipMode === 'ja-en';
 
@@ -723,11 +745,28 @@ function PhrasesTab({
 // ─────────────────────────────────────────────
 // WordsTab (AI生成単語カード)
 // ─────────────────────────────────────────────
+interface WordsTabProps {
+  words: AIWord[];
+  currentIndex: number;
+  showDetail: boolean;
+  speakingHash: string | null;
+  wordLoading: boolean;
+  wordRemainingToday: number | null;
+  wordDailyLimit: number;
+  wordLimitReached: boolean;
+  reviewedWordsToday: AIWord[];
+  onToggleDetail: () => void;
+  onSpeak: (word: AIWord) => void;
+  onNext: () => void;
+  onPrev: () => void;
+  onReloadWords: () => void;
+}
+
 function WordsTab({
   words, currentIndex, showDetail, speakingHash,
   wordLoading, wordRemainingToday, wordDailyLimit, wordLimitReached,
   reviewedWordsToday, onToggleDetail, onSpeak, onNext, onPrev, onReloadWords,
-}: any) {
+}: WordsTabProps) {
   const current: AIWord | undefined = words[currentIndex];
   const isSpeaking = speakingHash === current?.hash;
 

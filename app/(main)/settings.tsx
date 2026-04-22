@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, Alert, ActivityIndicator, Switch, Modal, Platform,
+  TextInput, Alert, ActivityIndicator, Switch, Modal, Platform, Linking,
 } from 'react-native';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -11,6 +11,11 @@ import { useAuthStore } from '../../store/authStore';
 import { useNotificationStore } from '../../store/notificationStore';
 import { authService } from '../../services/auth';
 import { Colors, FontSize, FontWeight, Spacing, BorderRadius } from '../../constants/theme';
+
+// ── 法的URL（本番前に差し替えてください） ──
+const PRIVACY_POLICY_URL = 'https://your-domain.com/privacy';
+const TERMS_OF_SERVICE_URL = 'https://your-domain.com/terms';
+const APP_STORE_ID = 'YOUR_APP_STORE_ID'; // 取得後に差し替え
 
 type LevelId = 'beginner' | 'intermediate' | 'advanced';
 const LEVEL_OPTIONS: { id: LevelId; label: string; emoji: string; desc: string }[] = [
@@ -612,8 +617,72 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        {/* ─── 法的情報 ─── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>法的情報</Text>
+          <View style={styles.card}>
+            <TouchableOpacity
+              style={styles.row}
+              onPress={() => Linking.openURL(PRIVACY_POLICY_URL)}
+              activeOpacity={0.8}
+              accessibilityLabel="プライバシーポリシーを開く"
+              accessibilityRole="link"
+            >
+              <View style={styles.rowIcon}>
+                <Ionicons name="shield-checkmark-outline" size={20} color={Colors.primary} />
+              </View>
+              <View style={styles.rowBody}>
+                <Text style={styles.rowLabel}>プライバシーポリシー</Text>
+              </View>
+              <Ionicons name="open-outline" size={16} color={Colors.textMuted} />
+            </TouchableOpacity>
+
+            <View style={styles.divider} />
+
+            <TouchableOpacity
+              style={styles.row}
+              onPress={() => Linking.openURL(TERMS_OF_SERVICE_URL)}
+              activeOpacity={0.8}
+              accessibilityLabel="利用規約を開く"
+              accessibilityRole="link"
+            >
+              <View style={styles.rowIcon}>
+                <Ionicons name="document-outline" size={20} color={Colors.primary} />
+              </View>
+              <View style={styles.rowBody}>
+                <Text style={styles.rowLabel}>利用規約</Text>
+              </View>
+              <Ionicons name="open-outline" size={16} color={Colors.textMuted} />
+            </TouchableOpacity>
+
+            <View style={styles.divider} />
+
+            <TouchableOpacity
+              style={styles.row}
+              onPress={() => {
+                const url = Platform.OS === 'ios'
+                  ? `https://apps.apple.com/app/id${APP_STORE_ID}?action=write-review`
+                  : `market://details?id=com.simple.eikaiwaai`;
+                Linking.openURL(url);
+              }}
+              activeOpacity={0.8}
+              accessibilityLabel="App Storeでレビューを書く"
+              accessibilityRole="button"
+            >
+              <View style={[styles.rowIcon, { backgroundColor: Colors.warning + '20' }]}>
+                <Ionicons name="star-outline" size={20} color={Colors.warning} />
+              </View>
+              <View style={styles.rowBody}>
+                <Text style={styles.rowLabel}>アプリを評価する</Text>
+              </View>
+              <Ionicons name="open-outline" size={16} color={Colors.textMuted} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
         <View style={styles.footer}>
-          <Text style={styles.footerText}>英会話AI v1.0</Text>
+          <Text style={styles.footerText}>英会話AI v1.0.0</Text>
+          <Text style={[styles.footerText, { marginTop: 4 }]}>© 2025 英会話AI. All rights reserved.</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
