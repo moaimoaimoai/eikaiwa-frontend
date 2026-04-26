@@ -130,6 +130,15 @@ export interface SummaryPhrase {
   context_ja: string;
 }
 
+export interface ScoreReasoning {
+  errors_found: number;
+  error_rate_per_turn: number;
+  accuracy_basis: string;
+  vocabulary_basis: string;
+  fluency_basis: string;
+  pronunciation_note: string;
+}
+
 export interface ConversationSummary {
   summary_ja: string;
   strong_points_ja: string[];
@@ -138,6 +147,8 @@ export interface ConversationSummary {
   fluency_score: number;
   accuracy_score: number;
   vocabulary_score: number;
+  /** 各スコアの論理的根拠（精緻な採点の証拠として表示） */
+  score_reasoning?: ScoreReasoning;
   encouragement_ja: string;
   useful_phrases?: SummaryPhrase[];
 }

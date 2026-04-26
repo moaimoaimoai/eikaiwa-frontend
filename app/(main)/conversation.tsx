@@ -360,10 +360,12 @@ export default function ConversationScreen() {
     setUserTurnCount(newCount);
 
     try {
-      const result = await conversationService.sendMessage(sessionId, content, true);
+      // include_audio=false でAIテキストを先に受信 → UIを即アンロック
+      const result = await conversationService.sendMessage(sessionId, content, false);
       addMessage(result.user_message);
       addMessage(result.ai_message);
 
+      // correction UI はこれまで通り表示（AIの会話文中の言及はシステムプロンプトで抑制済み）
       if (result.correction) {
         addCorrection(result.correction);
         setCurrentCorrection(result.correction);
@@ -374,13 +376,13 @@ export default function ConversationScreen() {
         setCurrentCoaching(result.coaching);
       }
 
-      if (result.audio_base64) {
-        await playBase64Audio(result.audio_base64);
-      } else {
-        await playAIResponse(result.ai_message.content);
-      }
+      // ローディングをここで解除し、テキスト表示と入力を即座に開放
+      setLoading(false);
 
       scrollRef.current?.scrollToEnd({ animated: true });
+
+      // TTS はバックグラウンドで非同期再生（UI をブロックしない）
+      playAIResponse(result.ai_message.content).catch(() => {});
 
       // 上限に達したら自動で終了を促す
       if (newCount >= MAX_TURNS) {
@@ -1001,6 +1003,35 @@ export default function ConversationScreen() {
               ))}
             </View>
 
+            {/* ── 採点根拠カード ── */}
+            {summary.score_reasoning && (
+              <View style={styles.scoringBasisCard}>
+                <View style={styles.scoringBasisHeader}>
+                  <Ionicons name="analytics" size={15} color={Colors.info} />
+                  <Text style={styles.scoringBasisTitle}>採点の根拠</Text>
+                  <View style={styles.scoringBasisBadge}>
+                    <Text style={styles.scoringBasisBadgeText}>
+                      ミス {summary.score_reasoning.errors_found}件 /{' '}
+                      {userTurnCount}ターン（{summary.score_reasoning.error_rate_per_turn.toFixed(1)}件/回）
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.scoringBasisRow}>
+                  <Text style={styles.scoringBasisLabel}>✅ 正確さ</Text>
+                  <Text style={styles.scoringBasisText}>{summary.score_reasoning.accuracy_basis}</Text>
+                </View>
+                <View style={styles.scoringBasisRow}>
+                  <Text style={styles.scoringBasisLabel}>📚 語彙</Text>
+                  <Text style={styles.scoringBasisText}>{summary.score_reasoning.vocabulary_basis}</Text>
+                </View>
+                <View style={styles.scoringBasisRow}>
+                  <Text style={styles.scoringBasisLabel}>💬 流暢さ</Text>
+                  <Text style={styles.scoringBasisText}>{summary.score_reasoning.fluency_basis}</Text>
+                </View>
+                <Text style={styles.scoringBasisNote}>{summary.score_reasoning.pronunciation_note}</Text>
+              </View>
+            )}
+
             <View style={styles.summarySection}>
               <View style={styles.summarySectionHeader}>
                 <Ionicons name="document-text" size={16} color={Colors.primary} />
@@ -1542,9 +1573,9 @@ const styles = StyleSheet.create({
 
   /* Setup */
   setupContent: { padding: Spacing.lg, gap: Spacing.xl, paddingBottom: 100 },
-  setupTitle: { fontSize: FontSize.xxl, fontWeight: FontWeight.extrabold, color: Colors.textPrimary },
+  setupTitle: { fontSize: 28, fontWeight: FontWeight.extrabold, color: Colors.textPrimary, letterSpacing: -0.5 },
   section: { gap: Spacing.sm },
-  sectionLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textSecondary },
+  sectionLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textSecondary, textTransform: 'uppercase' as const, letterSpacing: 0.8 },
 
   /* 今日のトピックバナー（セットアップ画面） */
   dailyTopicBanner: {
@@ -1595,24 +1626,33 @@ const styles = StyleSheet.create({
   dailyTopicRestoreText: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary },
   avatarGrid: { flexDirection: 'row', gap: Spacing.sm },
   avatarCard: {
-    flex: 1, alignItems: 'center', gap: 4, padding: Spacing.sm,
-    backgroundColor: Colors.backgroundCard, borderRadius: BorderRadius.lg,
+    flex: 1, alignItems: 'center', gap: 5,
+    paddingVertical: Spacing.md, paddingHorizontal: Spacing.xs,
+    backgroundColor: Colors.backgroundCard, borderRadius: BorderRadius.xl,
     borderWidth: 1.5, borderColor: Colors.border,
   },
-  avatarCardActive: { borderColor: Colors.primary, backgroundColor: 'rgba(79,70,229,0.1)' },
-  avatarEmoji: { fontSize: 32 },
+  avatarCardActive: {
+    borderColor: Colors.primary,
+    backgroundColor: 'rgba(79,70,229,0.12)',
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  avatarEmoji: { fontSize: 36 },
   avatarName: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  avatarAccent: { fontSize: FontSize.xs, color: Colors.textMuted },
-  avatarDesc: { fontSize: 10, color: Colors.textMuted, textAlign: 'center' },
+  avatarAccent: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.medium },
+  avatarDesc: { fontSize: 10, color: Colors.textMuted, textAlign: 'center', lineHeight: 14 },
   topicGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   topicChip: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingVertical: 8, paddingHorizontal: Spacing.md,
+    paddingVertical: 10, paddingHorizontal: Spacing.md,
     backgroundColor: Colors.backgroundCard, borderRadius: BorderRadius.full,
     borderWidth: 1.5, borderColor: Colors.border,
   },
-  topicChipIcon: { fontSize: 16 },
-  topicChipLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+  topicChipIcon: { fontSize: 17 },
+  topicChipLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.semibold },
   turnInfoCard: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
     backgroundColor: Colors.info + '15',
@@ -1626,15 +1666,20 @@ const styles = StyleSheet.create({
   /* Chat header */
   chatHeader: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md, paddingVertical: 12,
     backgroundColor: Colors.backgroundSecondary,
-    borderBottomWidth: 1, borderBottomColor: Colors.border,
+    borderBottomWidth: 0.5, borderBottomColor: Colors.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 4,
   },
   chatHeaderInfo: { flex: 1 },
-  chatHeaderName: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  chatHeaderStatus: { fontSize: FontSize.xs, color: Colors.success },
+  chatHeaderName: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary, letterSpacing: -0.2 },
+  chatHeaderStatus: { fontSize: FontSize.xs, color: Colors.success, fontWeight: FontWeight.medium },
   chatHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  timer: { fontSize: FontSize.sm, color: Colors.textMuted, fontFamily: 'monospace' },
+  timer: { fontSize: FontSize.sm, color: Colors.textMuted, fontVariant: ['tabular-nums'] as any },
 
   /* ターンカウンター */
   turnCounter: {
@@ -1676,14 +1721,14 @@ const styles = StyleSheet.create({
   typingBubble: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.backgroundCard, borderRadius: BorderRadius.lg, padding: Spacing.md },
   typingText: { color: Colors.textMuted, fontSize: FontSize.sm },
 
-  suggestions: { maxHeight: 44, marginBottom: 4 },
+  suggestions: { maxHeight: 46, marginBottom: 4 },
   suggestionsContent: { paddingHorizontal: Spacing.md, gap: 8, alignItems: 'center' },
   suggestionChip: {
-    backgroundColor: 'rgba(79,70,229,0.15)', borderRadius: BorderRadius.full,
-    paddingVertical: 6, paddingHorizontal: Spacing.md,
-    borderWidth: 1, borderColor: Colors.primary + '40',
+    backgroundColor: 'rgba(79,70,229,0.12)', borderRadius: BorderRadius.full,
+    paddingVertical: 8, paddingHorizontal: Spacing.md,
+    borderWidth: 1, borderColor: Colors.primary + '35',
   },
-  suggestionText: { color: Colors.primaryLight, fontSize: FontSize.xs, fontWeight: FontWeight.medium },
+  suggestionText: { color: Colors.primaryLight, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
 
   /* 入力エリア */
   inputArea: {
@@ -1957,34 +2002,52 @@ const styles = StyleSheet.create({
   },
 
   /* Push-to-Talk ボタン */
-  voiceButtonContainer: { alignItems: 'center', gap: 6 },
+  voiceButtonContainer: { alignItems: 'center', gap: 7 },
   voiceButtonGlow: {
-    position: 'absolute', top: -10,
-    width: 84, height: 84, borderRadius: 42,
+    position: 'absolute', top: -12,
+    width: 90, height: 90, borderRadius: 45,
   },
   voiceButtonPressable: {},
-  voiceButton: { width: 68, height: 68, borderRadius: 34, alignItems: 'center', justifyContent: 'center' },
-  voiceButtonLabel: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.medium },
+  voiceButton: { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center' },
+  voiceButtonLabel: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.semibold },
 
   /* Summary */
   summaryContent: { padding: Spacing.lg, gap: Spacing.lg, paddingBottom: 100 },
-  summaryHero: { alignItems: 'center', gap: Spacing.sm },
+  summaryHero: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.sm },
   summaryTrophyWrap: {
-    width: 96, height: 96, borderRadius: 48,
-    backgroundColor: Colors.gold + '20',
+    width: 104, height: 104, borderRadius: 52,
+    backgroundColor: Colors.gold + '18',
     alignItems: 'center', justifyContent: 'center',
+    borderWidth: 2, borderColor: Colors.gold + '35',
+    shadowColor: Colors.gold,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 6,
   },
-  summaryTitle: { fontSize: FontSize.xxl, fontWeight: FontWeight.extrabold, color: Colors.textPrimary },
-  summaryTurns: { fontSize: FontSize.sm, color: Colors.textSecondary },
+  summaryTitle: { fontSize: 28, fontWeight: FontWeight.extrabold, color: Colors.textPrimary, letterSpacing: -0.5 },
+  summaryTurns: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.medium },
   scoreGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  scoreCard: { flex: 1, minWidth: '45%', backgroundColor: Colors.backgroundCard, borderRadius: BorderRadius.lg, padding: Spacing.md, alignItems: 'center', gap: 4 },
-  scoreValue: { fontSize: FontSize.xxxl, fontWeight: FontWeight.extrabold },
-  scoreLabel: { fontSize: FontSize.sm, color: Colors.textSecondary },
-  summarySection: { backgroundColor: Colors.backgroundCard, borderRadius: BorderRadius.lg, padding: Spacing.lg, gap: Spacing.sm },
-  summarySectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  scoreCard: {
+    flex: 1, minWidth: '45%',
+    backgroundColor: Colors.backgroundCard,
+    borderRadius: BorderRadius.xl,
+    padding: Spacing.lg,
+    alignItems: 'center', gap: 6,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  scoreValue: { fontSize: 38, fontWeight: FontWeight.extrabold, letterSpacing: -1 },
+  scoreLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+  summarySection: {
+    backgroundColor: Colors.backgroundCard,
+    borderRadius: BorderRadius.xl,
+    padding: Spacing.lg, gap: Spacing.sm,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  summarySectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   summarySectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  summaryText: { fontSize: FontSize.md, color: Colors.textSecondary, lineHeight: 22 },
-  bulletRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  summaryText: { fontSize: FontSize.md, color: Colors.textSecondary, lineHeight: 23 },
+  bulletRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 2 },
   bulletItem: { flex: 1, fontSize: FontSize.md, color: Colors.textSecondary, lineHeight: 22 },
   /* 便利フレーズカード（サマリー） */
   summaryPhraseCard: {
@@ -2033,7 +2096,65 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  encouragementCard: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm, backgroundColor: 'rgba(79,70,229,0.1)', borderRadius: BorderRadius.lg, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.primary + '30' },
+  /* 採点根拠カード */
+  scoringBasisCard: {
+    marginHorizontal: 0,
+    marginBottom: Spacing.sm,
+    backgroundColor: Colors.info + '0E',
+    borderRadius: BorderRadius.lg,
+    borderWidth: 1,
+    borderColor: Colors.info + '25',
+    padding: Spacing.md,
+    gap: Spacing.sm,
+  },
+  scoringBasisHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  scoringBasisTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.bold,
+    color: Colors.info,
+  },
+  scoringBasisBadge: {
+    marginLeft: 'auto' as any,
+    backgroundColor: Colors.info + '20',
+    borderRadius: BorderRadius.sm,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  scoringBasisBadgeText: {
+    fontSize: 11,
+    color: Colors.info,
+    fontWeight: FontWeight.semibold,
+  },
+  scoringBasisRow: {
+    gap: 2,
+  },
+  scoringBasisLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.bold,
+    color: Colors.textSecondary,
+  },
+  scoringBasisText: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+    lineHeight: 18,
+  },
+  scoringBasisNote: {
+    fontSize: 10,
+    color: Colors.textMuted,
+    fontStyle: 'italic' as any,
+    marginTop: 2,
+  },
+
+  encouragementCard: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
+    backgroundColor: 'rgba(79,70,229,0.1)', borderRadius: BorderRadius.xl,
+    padding: Spacing.lg, borderWidth: 1, borderColor: Colors.primary + '30',
+  },
   encouragementText: { flex: 1, fontSize: FontSize.md, color: Colors.primaryLight, lineHeight: 24 },
   summaryContainer: { flex: 1 },
   summaryActions: { gap: Spacing.sm },
@@ -2043,22 +2164,32 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: Spacing.sm,
     paddingHorizontal: Spacing.md,
-    paddingTop: Spacing.sm,
+    paddingTop: Spacing.md,
     paddingBottom: Spacing.md,
     backgroundColor: Colors.backgroundSecondary,
-    borderTopWidth: 1,
+    borderTopWidth: 0.5,
     borderTopColor: Colors.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 8,
   },
   summaryPrimaryBtn: {
-    flex: 1,
+    flex: 2,
     borderRadius: BorderRadius.lg,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 4,
   },
   summaryPrimaryBtnGradient: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.sm,
-    paddingVertical: 14,
+    paddingVertical: 16,
     borderRadius: BorderRadius.lg,
     overflow: 'hidden',
   },
@@ -2066,6 +2197,7 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     fontWeight: FontWeight.bold,
     color: '#fff',
+    letterSpacing: -0.2,
   },
   summarySecondaryBtn: {
     flex: 1,
@@ -2073,14 +2205,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.sm,
-    paddingVertical: 14,
+    paddingVertical: 16,
     borderRadius: BorderRadius.lg,
     borderWidth: 1.5,
     borderColor: Colors.primary + '60',
     backgroundColor: Colors.primary + '10',
   },
   summarySecondaryBtnText: {
-    fontSize: FontSize.md,
+    fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
     color: Colors.primaryLight,
   },
