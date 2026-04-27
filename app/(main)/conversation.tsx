@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import { conversationService } from '../../services/conversation';
+import { useNativeSpeech } from '../../hooks/useNativeSpeech';
 import { useConversationStore } from '../../store/conversationStore';
 import { useAuthStore } from '../../store/authStore';
 import { useNotificationStore } from '../../store/notificationStore';
@@ -18,6 +19,7 @@ import { sendAchievementNotification } from '../../services/notifications';
 import { AvatarDisplay } from '../../components/AvatarDisplay';
 import { MessageBubble } from '../../components/MessageBubble';
 import { Button } from '../../components/ui/Button';
+import { AppBackground } from '../../components/ui/AppBackground';
 import { Colors, FontSize, FontWeight, Spacing, BorderRadius, AVATARS, TOPICS, DAILY_TOPICS } from '../../constants/theme';
 import { Message, Correction, TranslationResult, CoachingTip } from '../../types';
 
@@ -117,7 +119,6 @@ export default function ConversationScreen() {
   const [mode, setMode] = useState<Mode>('setup');
   const [inputText, setInputText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [currentCorrection, setCurrentCorrection] = useState<Correction | null>(null);
@@ -137,22 +138,19 @@ export default function ConversationScreen() {
   const [micPermission, setMicPermission] = useState<'unknown' | 'granted' | 'denied'>('unknown');
 
   /**
-   * 録音の3フェーズ管理
+   * 音声認識の3フェーズ管理
    *   idle      : ボタン未押下
-   *   preparing : ボタン押下〜録音オブジェクト生成完了前（スピナー表示）
-   *   recording : 実際に録音中（赤ボタン表示）
+   *   preparing : ボタン押下〜認識開始前（スピナー表示）
+   *   recording : 実際に認識中（赤ボタン表示）
    *
-   * ref で持つことで stopRecording の stale closure 問題を回避する。
+   * ref で持つことで stale closure 問題を回避する。
    * isPreparing state は UI レンダリング専用。
    */
   const micPhaseRef = useRef<'idle' | 'preparing' | 'recording'>('idle');
   const [isPreparing, setIsPreparing] = useState(false); // スピナー表示用
 
-  /** 録音開始タイムスタンプ（最短録音時間チェック用） */
-  const recordingStartTimeRef = useRef<number | null>(null);
   /** 録音中の経過秒数（UIカウンター用） */
   const [recordingSec, setRecordingSec] = useState(0);
-  const recordingTickRef = useRef<NodeJS.Timeout | null>(null);
 
   // ── 日本語ヘルプ機能の状態 ──
   const [showJpHelp, setShowJpHelp] = useState(false);
@@ -166,8 +164,12 @@ export default function ConversationScreen() {
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const scrollRef = useRef<ScrollView>(null);
-  const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingAnim = useRef(new Animated.Value(1)).current;
+
+  /** 無操作タイムアウト用 */
+  const lastActivityRef = useRef<number>(Date.now());
+  const inactivityTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const INACTIVITY_LIMIT_MS = 10 * 60 * 1000; // 10分
   const pulseAnim = useRef(new Animated.Value(0)).current;
   // AI発言中の波形アニメーション用
   const speakingBar1 = useRef(new Animated.Value(0.3)).current;
@@ -185,14 +187,20 @@ export default function ConversationScreen() {
   const [dailyTopicActive, setDailyTopicActive] = useState(true);
   const dailyTopicInfo = dailyTopicActive ? dailyTopicBase : null;
 
+  // params.topic / params.dailyTopic が変わるたびに状態を更新する
+  // （ホーム画面から別トピックを選んで遷移した場合も確実に反映される）
   useEffect(() => {
-    // params.topic がない場合は必ず 'free' にリセットする
-    // （前回のデイリートピックや別トピックが残らないようにする）
     setTopic(params.topic || 'free');
-    // マウント時にマイク権限を事前チェック
+    // dailyTopic が変わったら「外す」フラグもリセット
+    setDailyTopicActive(true);
+  }, [params.topic, params.dailyTopic]);
+
+  // マウント時の初期化・アンマウント時のクリーンアップ
+  useEffect(() => {
     checkMicPermission();
     return () => {
       timerRef.current && clearInterval(timerRef.current);
+      inactivityTimerRef.current && clearInterval(inactivityTimerRef.current);
       sound?.unloadAsync();
     };
   }, []);
@@ -238,6 +246,38 @@ export default function ConversationScreen() {
       glow.start();
       return () => { pulse.stop(); glow.stop(); };
     }
+  }, [mode]);
+
+  // ── 10分無操作で自動セッション終了 ──
+  useEffect(() => {
+    if (mode !== 'chat') {
+      // chat 以外のモードではタイマーを止める
+      if (inactivityTimerRef.current) {
+        clearInterval(inactivityTimerRef.current);
+        inactivityTimerRef.current = null;
+      }
+      return;
+    }
+
+    // chat 開始 / 再入時に最終アクティビティをリセット
+    lastActivityRef.current = Date.now();
+
+    inactivityTimerRef.current = setInterval(() => {
+      const elapsed = Date.now() - lastActivityRef.current;
+      if (elapsed >= INACTIVITY_LIMIT_MS) {
+        clearInterval(inactivityTimerRef.current!);
+        inactivityTimerRef.current = null;
+        // セッションを自動終了（endSession は内部で mode を 'ending' → 'summary' に遷移させる）
+        endSession(true);
+      }
+    }, 60 * 1000); // 1分ごとにチェック
+
+    return () => {
+      if (inactivityTimerRef.current) {
+        clearInterval(inactivityTimerRef.current);
+        inactivityTimerRef.current = null;
+      }
+    };
   }, [mode]);
 
   // 録音中のパルスアニメーション
@@ -293,6 +333,71 @@ export default function ConversationScreen() {
   const remainingTurns = MAX_TURNS - userTurnCount;
   const isNearLimit = remainingTurns <= WARN_AT_REMAINING && remainingTurns > 0;
   const isAtLimit = remainingTurns <= 0;
+
+  // ─── ネイティブ音声認識 ───
+  // sendMessage は後で定義されるが、ref 経由で常に最新版を参照する
+  const sendMessageRef = useRef<((text?: string) => Promise<void>) | null>(null);
+
+  const nativeSpeech = useNativeSpeech({
+    lang: 'en-US',
+    interimResults: true,
+    onResult: async (text) => {
+      if (!text.trim()) {
+        micPhaseRef.current = 'idle';
+        setIsRecording(false);
+        setTranscribeStatus('idle');
+        return;
+      }
+      micPhaseRef.current = 'idle';
+      setIsRecording(false);
+      setTranscribeStatus('recognized');
+      setRecognizedText(text);
+      try {
+        await sendMessageRef.current?.(text);
+      } finally {
+        setTranscribeStatus('idle');
+        setRecognizedText('');
+      }
+    },
+    onError: (error) => {
+      micPhaseRef.current = 'idle';
+      setIsRecording(false);
+      setIsPreparing(false);
+      setTranscribeStatus('idle');
+      if (error === 'module_not_available') {
+        Alert.alert(
+          'リビルドが必要です',
+          'ネイティブ音声認識を使うには、アプリの再ビルドが必要です。\n\n' +
+          '  cd frontend\n  npm install\n  npx expo run:ios\n\n' +
+          'テキスト入力でも会話できます。'
+        );
+      } else if (error !== 'permission_denied') {
+        Alert.alert('エラー', '音声認識に失敗しました。テキスト入力でも会話できます。');
+      }
+    },
+  });
+
+  // ネイティブ音声認識: listening 開始時に UI を recording フェーズへ移行
+  useEffect(() => {
+    if (nativeSpeech.status === 'listening') {
+      micPhaseRef.current = 'recording';
+      setIsPreparing(false);
+      setIsRecording(true);
+      setTranscribeStatus('listening');
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+  }, [nativeSpeech.status]);
+
+  // isRecording 中の秒数カウンター
+  useEffect(() => {
+    if (isRecording) {
+      setRecordingSec(0);
+      const interval = setInterval(() => setRecordingSec(s => s + 1), 1000);
+      return () => clearInterval(interval);
+    } else {
+      setRecordingSec(0);
+    }
+  }, [isRecording]);
 
   // ─── セッション開始 ───
   const startSession = async () => {
@@ -359,6 +464,9 @@ export default function ConversationScreen() {
     const newCount = userTurnCount + 1;
     setUserTurnCount(newCount);
 
+    // 最終アクティビティを更新（無操作タイムアウトのリセット）
+    lastActivityRef.current = Date.now();
+
     try {
       // include_audio=false でAIテキストを先に受信 → UIを即アンロック
       const result = await conversationService.sendMessage(sessionId, content, false);
@@ -415,6 +523,9 @@ export default function ConversationScreen() {
     }
   };
 
+  // sendMessage は render ごとに再生成されるため、ref を常に最新に保つ
+  sendMessageRef.current = sendMessage;
+
   const playAIResponse = async (text: string) => {
     try {
       setIsSpeaking(true);
@@ -451,11 +562,10 @@ export default function ConversationScreen() {
     } catch { setIsSpeaking(false); }
   };
 
-  // ─── 録音開始（長押し開始） ───
+  // ─── 音声認識開始 ───
   const startRecording = async () => {
-    if (isLoading || isSpeaking || isAtLimit) { return; }
-    // 既に別フェーズ中なら無視
-    if (micPhaseRef.current !== 'idle') { return; }
+    if (isLoading || isSpeaking || isAtLimit) return;
+    if (micPhaseRef.current !== 'idle') return;
 
     // 既に拒否済みの場合は設定アプリへ誘導
     if (micPermission === 'denied') {
@@ -470,189 +580,39 @@ export default function ConversationScreen() {
       return;
     }
 
-    // ── Phase 1: preparing（スピナー表示）──
+    // preparing フェーズへ（スピナー表示）
     micPhaseRef.current = 'preparing';
     setIsPreparing(true);
+    setTranscribeStatus('listening');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-    const prepStart = Date.now();
-    const MIN_PREP_MS = 300; // 最低 0.3 秒は準備中スピナーを見せる（短すぎる録音防止）
-
-    try {
-      // 1. 権限確認
-      const { granted, canAskAgain } = await Audio.requestPermissionsAsync();
-      if (micPhaseRef.current !== 'preparing') { return; }
-
-      if (!granted) {
-        micPhaseRef.current = 'idle';
-        setIsPreparing(false);
-        setMicPermission('denied');
-        if (!canAskAgain) {
-          Alert.alert(
-            'マイクの権限が必要です',
-            '設定アプリでマイクの使用を許可してください。テキスト入力でも会話できます。',
-            [
-              { text: 'キャンセル', style: 'cancel' },
-              { text: '設定を開く', onPress: () => Linking.openSettings() },
-            ]
-          );
-        } else {
-          Alert.alert('権限が必要です', 'マイクの使用を許可してください。テキスト入力でも会話できます。');
-        }
-        return;
-      }
-      setMicPermission('granted');
-
-      // 2. AudioMode 切替（実機で時間がかかるポイント）
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      if (micPhaseRef.current !== 'preparing') { return; }
-
-      // 3. 最低表示時間に満たない場合だけ待機
-      const elapsed = Date.now() - prepStart;
-      if (elapsed < MIN_PREP_MS) {
-        await new Promise<void>(resolve => setTimeout(resolve, MIN_PREP_MS - elapsed));
-      }
-      if (micPhaseRef.current !== 'preparing') { return; }
-
-      // 4. 録音オブジェクト生成
-      const { recording: rec } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      if (micPhaseRef.current !== 'preparing') {
-        rec.stopAndUnloadAsync().catch(() => {});
-        recordingRef.current = null;
-        return;
-      }
-
-      // ── Phase 2: recording ──
-      recordingRef.current = rec;
-      setRecording(rec);
-      micPhaseRef.current = 'recording';
-      setIsPreparing(false);
-      setIsRecording(true);
-      setTranscribeStatus('listening');
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      // 録音開始時刻を記録し、1秒ごとにカウンターを更新
-      recordingStartTimeRef.current = Date.now();
-      setRecordingSec(0);
-      recordingTickRef.current = setInterval(() => {
-        setRecordingSec(s => s + 1);
-      }, 1000);
-
-    } catch (e: any) {
-      micPhaseRef.current = 'idle';
-      setIsPreparing(false);
-      setIsRecording(false);
-      setTranscribeStatus('idle');
-      const isSimulator = e?.message?.includes('simulator') || e?.message?.includes('Simulator');
-      if (isSimulator) {
-        Alert.alert(
-          'シミュレーターではマイクを使用できません',
-          'テキスト入力で会話してください。実機ではマイクが利用できます。'
-        );
-      } else {
-        Alert.alert('録音を開始できませんでした', 'テキスト入力でも会話できます。');
-      }
-    }
-  };
-
-  // ─── 録音停止の実処理（録音オブジェクトを直接受け取るバージョン） ───
-  const stopRecordingWithRef = async (rec: Audio.Recording) => {
-    // タイマークリア
-    if (recordingTickRef.current) { clearInterval(recordingTickRef.current); recordingTickRef.current = null; }
-    recordingStartTimeRef.current = null;
-    setRecordingSec(0);
-    micPhaseRef.current = 'idle';
-    setIsRecording(false);
-    setIsPreparing(false);
-    setTranscribeStatus('processing');
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    try {
-      await rec.stopAndUnloadAsync();
-      const uri = rec.getURI();
-      recordingRef.current = null;
-      setRecording(null);
-      if (uri) {
-        const transcribed = await conversationService.transcribeAudio(uri);
-        if (transcribed) {
-          setRecognizedText(transcribed);
-          setTranscribeStatus('recognized');
-          await sendMessage(transcribed);
-        } else {
-        }
-      }
-    } catch (e: any) {
-      Alert.alert('エラー', '音声認識に失敗しました');
-    }
-    finally {
-      setTranscribeStatus('idle');
-      setRecognizedText('');
-    }
-  };
-
-  // ─── 録音停止（長押し解放） ───
-  const stopRecording = async () => {
-    const phase = micPhaseRef.current;
-
-    if (phase === 'preparing') {
-      // 準備フェーズ中に指が離れた → startRecording の await チェックで検知させるだけ
-      micPhaseRef.current = 'idle';
-      setIsPreparing(false);
-      return;
-    }
-
-    if (phase === 'recording') {
-      const currentRecording = recordingRef.current;
-      if (currentRecording) {
-        await stopRecordingWithRef(currentRecording);
-      } else {
-        // 万が一 ref が null でも状態だけ戻す
-        micPhaseRef.current = 'idle';
-        setIsRecording(false);
-        setTranscribeStatus('idle');
-      }
-      return;
-    }
-
-    // idle のまま onPressOut が来た場合は何もしない
+    // nativeSpeech.start() 内部で権限リクエスト → SFSpeechRecognizer 起動
+    // 'start' イベント発火時に useEffect で recording フェーズへ移行する
+    await nativeSpeech.start();
   };
 
   /**
    * ─── トグル録音（タップ1回で開始、もう1回で停止・送信）───
    *
-   * 長押し保持型だと onPressOut が JS イベントキューで遅延し、録音開始直後に
-   * 即停止してしまう問題があるため、タップ式トグルに変更。
-   *   1回目タップ → preparing → recording
-   *   2回目タップ → 停止 → 文字起こし → 送信
+   *   1回目タップ → preparing → listening（ネイティブ認識開始）
+   *   2回目タップ → 認識停止 → onResult コールバックでテキスト取得 → 送信
    */
-  /** 最短録音時間 (ms) — これより短いと無音・空文字になりやすい */
-  const MIN_RECORDING_MS = 1500;
-
   const handleMicPress = async () => {
     const phase = micPhaseRef.current;
 
     if (phase === 'idle') {
       await startRecording();
     } else if (phase === 'preparing') {
-      // 準備中にタップ → キャンセル
+      // 準備中にキャンセル
+      nativeSpeech.cancel();
       micPhaseRef.current = 'idle';
       setIsPreparing(false);
+      setTranscribeStatus('idle');
     } else if (phase === 'recording') {
-      // 録音時間が短すぎる場合はガード（Whisperが空文字を返す）
-      const elapsed = recordingStartTimeRef.current ? Date.now() - recordingStartTimeRef.current : MIN_RECORDING_MS;
-      if (elapsed < MIN_RECORDING_MS) {
-        // まだ短すぎる → 何もしない（残り時間をフィードバック）
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        return;
-      }
-      const currentRecording = recordingRef.current;
-      if (currentRecording) {
-        await stopRecordingWithRef(currentRecording);
-      } else {
-        micPhaseRef.current = 'idle';
-        setIsRecording(false);
-        setTranscribeStatus('idle');
-      }
+      // 認識停止 → onResult が呼ばれてテキスト確定・送信
+      setTranscribeStatus('processing');
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      nativeSpeech.stop();
     }
   };
 
@@ -813,11 +773,16 @@ export default function ConversationScreen() {
   if (mode === 'ending') {
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-        <LinearGradient colors={['#0F172A', '#1E1B4B', '#0F172A']} style={styles.endingScreen}>
-          {/* トロフィー */}
-          <Animated.View style={[styles.endingIconWrap, { transform: [{ scale: recordingAnim }] }]}>
-            <Ionicons name="trophy" size={44} color={Colors.gold} />
-          </Animated.View>
+        <AppBackground variant="warm" />
+        <View style={styles.endingScreen}>
+          {/* トロフィーグロー */}
+          <View style={styles.endingTrophyOuter}>
+            <View style={styles.endingTrophyInner}>
+              <Animated.View style={[styles.endingIconWrap, { transform: [{ scale: recordingAnim }] }]}>
+                <Ionicons name="trophy" size={44} color={Colors.gold} />
+              </Animated.View>
+            </View>
+          </View>
           <Text style={styles.loadingTitle}>結果を集計中...</Text>
           <Text style={styles.loadingSubtitle}>会話の内容を分析しています</Text>
 
@@ -846,7 +811,7 @@ export default function ConversationScreen() {
           </View>
 
           <ActivityIndicator size="small" color={Colors.primaryLight} style={{ marginTop: Spacing.lg }} />
-        </LinearGradient>
+        </View>
       </SafeAreaView>
     );
   }
@@ -855,8 +820,21 @@ export default function ConversationScreen() {
   if (mode === 'setup') {
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-        <ScrollView contentContainerStyle={styles.setupContent}>
-          <Text style={styles.setupTitle}>会話の設定</Text>
+        <AppBackground variant="default" />
+        <ScrollView contentContainerStyle={styles.setupContent} showsVerticalScrollIndicator={false}>
+          {/* ヘッダーエリア */}
+          <View style={styles.setupHeader}>
+            <LinearGradient
+              colors={['rgba(124,58,237,0.2)', 'rgba(91,33,182,0.08)']}
+              style={styles.setupHeaderGrad}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+            />
+            <View style={styles.setupHeaderIconWrap}>
+              <Ionicons name="mic" size={22} color={Colors.primaryLight} />
+            </View>
+            <Text style={styles.setupTitle}>会話の設定</Text>
+            <Text style={styles.setupSubtitle}>アバターとトピックを選んで話しましょう</Text>
+          </View>
 
           {/* 今日のトピックバナー */}
           {dailyTopicBase && (
@@ -978,11 +956,17 @@ export default function ConversationScreen() {
   if (mode === 'summary' && summary) {
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+        <AppBackground variant="warm" />
         <View style={styles.summaryContainer}>
-          <ScrollView contentContainerStyle={styles.summaryContent}>
+          <ScrollView contentContainerStyle={styles.summaryContent} showsVerticalScrollIndicator={false}>
+            {/* ヒーローエリア */}
             <View style={styles.summaryHero}>
-              <View style={styles.summaryTrophyWrap}>
-                <Ionicons name="trophy" size={48} color={Colors.gold} />
+              <View style={styles.summaryTrophyOuter}>
+                <View style={styles.summaryTrophyMid}>
+                  <View style={styles.summaryTrophyWrap}>
+                    <Ionicons name="trophy" size={48} color={Colors.gold} />
+                  </View>
+                </View>
               </View>
               <Text style={styles.summaryTitle}>会話完了！</Text>
               <Text style={styles.summaryTurns}>{userTurnCount}回のやり取りを達成</Text>
@@ -996,9 +980,15 @@ export default function ConversationScreen() {
                 { label: '語彙', score: summary.vocabulary_score, color: Colors.secondary, icon: 'book' as const },
               ].map((s, i) => (
                 <View key={i} style={styles.scoreCard}>
-                  <Ionicons name={s.icon} size={20} color={s.color} />
+                  <LinearGradient
+                    colors={[s.color + '18', s.color + '06']}
+                    style={StyleSheet.absoluteFill}
+                    start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                  />
+                  <Ionicons name={s.icon} size={22} color={s.color} />
                   <Text style={[styles.scoreValue, { color: s.color }]}>{s.score}</Text>
                   <Text style={styles.scoreLabel}>{s.label}</Text>
+                  <View style={[styles.scoreBottomBar, { backgroundColor: s.color }]} />
                 </View>
               ))}
             </View>
@@ -1401,8 +1391,12 @@ export default function ConversationScreen() {
               {transcribeStatus === 'listening' ? (
                 <>
                   <Animated.View style={[styles.recDot, { transform: [{ scale: recordingAnim }] }]} />
-                  <Text style={styles.transcribeText}>話してください...</Text>
-                  <Text style={styles.transcribeHint}>ボタンを離すと認識します</Text>
+                  {nativeSpeech.interimTranscript ? (
+                    <Text style={styles.transcribeText} numberOfLines={2}>{nativeSpeech.interimTranscript}</Text>
+                  ) : (
+                    <Text style={styles.transcribeText}>話してください...</Text>
+                  )}
+                  <Text style={styles.transcribeHint}>ボタンを押すと送信します</Text>
                 </>
               ) : transcribeStatus === 'recognized' ? (
                 <>
@@ -1542,12 +1536,23 @@ const styles = StyleSheet.create({
     flex: 1, alignItems: 'center', justifyContent: 'center',
     padding: Spacing.xl, gap: Spacing.sm,
   },
-  endingIconWrap: {
-    width: 80, height: 80, borderRadius: 40,
-    backgroundColor: Colors.gold + '20',
-    borderWidth: 2, borderColor: Colors.gold + '40',
+  endingTrophyOuter: {
+    width: 140, height: 140, borderRadius: 70,
+    backgroundColor: 'rgba(245,158,11,0.10)',
     alignItems: 'center', justifyContent: 'center',
     marginBottom: Spacing.xs,
+  },
+  endingTrophyInner: {
+    width: 108, height: 108, borderRadius: 54,
+    backgroundColor: 'rgba(245,158,11,0.15)',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: 'rgba(245,158,11,0.25)',
+  },
+  endingIconWrap: {
+    width: 80, height: 80, borderRadius: 40,
+    backgroundColor: Colors.gold + '22',
+    borderWidth: 1.5, borderColor: Colors.gold + '40',
+    alignItems: 'center', justifyContent: 'center',
   },
   endingSkeletonGrid: {
     flexDirection: 'row', flexWrap: 'wrap',
@@ -1555,11 +1560,12 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   endingSkeletonCard: {
-    width: '47%',            // 2列グリッド
-    backgroundColor: Colors.backgroundCard,
+    width: '47%',
+    backgroundColor: 'rgba(255,255,255,0.06)',
     borderRadius: BorderRadius.lg,
     padding: Spacing.md,
     alignItems: 'center', gap: 6,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
   },
   endingSkeletonIcon: {
     width: 24, height: 24, borderRadius: 12,
@@ -1572,8 +1578,32 @@ const styles = StyleSheet.create({
   },
 
   /* Setup */
-  setupContent: { padding: Spacing.lg, gap: Spacing.xl, paddingBottom: 100 },
-  setupTitle: { fontSize: 28, fontWeight: FontWeight.extrabold, color: Colors.textPrimary, letterSpacing: -0.5 },
+  setupContent: { padding: Spacing.lg, gap: Spacing.xl, paddingBottom: 120 },
+  setupHeader: {
+    alignItems: 'center', gap: 8,
+    paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.md,
+    borderRadius: BorderRadius.xl,
+    overflow: 'hidden',
+    borderWidth: 1, borderColor: 'rgba(124,58,237,0.2)',
+  },
+  setupHeaderGrad: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: BorderRadius.xl,
+  },
+  setupHeaderIconWrap: {
+    width: 52, height: 52, borderRadius: 26,
+    backgroundColor: 'rgba(124,58,237,0.25)',
+    borderWidth: 1.5, borderColor: 'rgba(167,139,250,0.4)',
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 4,
+  },
+  setupTitle: {
+    fontSize: 26, fontWeight: FontWeight.extrabold, color: Colors.textPrimary, letterSpacing: -0.5,
+  },
+  setupSubtitle: {
+    fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center',
+  },
   section: { gap: Spacing.sm },
   sectionLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textSecondary, textTransform: 'uppercase' as const, letterSpacing: 0.8 },
 
@@ -1628,12 +1658,12 @@ const styles = StyleSheet.create({
   avatarCard: {
     flex: 1, alignItems: 'center', gap: 5,
     paddingVertical: Spacing.md, paddingHorizontal: Spacing.xs,
-    backgroundColor: Colors.backgroundCard, borderRadius: BorderRadius.xl,
-    borderWidth: 1.5, borderColor: Colors.border,
+    backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: BorderRadius.xl,
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.10)',
   },
   avatarCardActive: {
-    borderColor: Colors.primary,
-    backgroundColor: 'rgba(79,70,229,0.12)',
+    borderColor: Colors.primaryLight,
+    backgroundColor: 'rgba(124,58,237,0.18)',
     shadowColor: Colors.primary,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.3,
@@ -1648,8 +1678,8 @@ const styles = StyleSheet.create({
   topicChip: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingVertical: 10, paddingHorizontal: Spacing.md,
-    backgroundColor: Colors.backgroundCard, borderRadius: BorderRadius.full,
-    borderWidth: 1.5, borderColor: Colors.border,
+    backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: BorderRadius.full,
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.10)',
   },
   topicChipIcon: { fontSize: 17 },
   topicChipLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.semibold },
@@ -2012,37 +2042,49 @@ const styles = StyleSheet.create({
   voiceButtonLabel: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.semibold },
 
   /* Summary */
-  summaryContent: { padding: Spacing.lg, gap: Spacing.lg, paddingBottom: 100 },
-  summaryHero: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.sm },
-  summaryTrophyWrap: {
-    width: 104, height: 104, borderRadius: 52,
-    backgroundColor: Colors.gold + '18',
+  summaryContent: { padding: Spacing.lg, gap: Spacing.lg, paddingBottom: 120 },
+  summaryHero: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.lg },
+  summaryTrophyOuter: {
+    width: 150, height: 150, borderRadius: 75,
+    backgroundColor: 'rgba(245,158,11,0.08)',
     alignItems: 'center', justifyContent: 'center',
-    borderWidth: 2, borderColor: Colors.gold + '35',
-    shadowColor: Colors.gold,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 6,
   },
-  summaryTitle: { fontSize: 28, fontWeight: FontWeight.extrabold, color: Colors.textPrimary, letterSpacing: -0.5 },
+  summaryTrophyMid: {
+    width: 118, height: 118, borderRadius: 59,
+    backgroundColor: 'rgba(245,158,11,0.13)',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: 'rgba(245,158,11,0.2)',
+  },
+  summaryTrophyWrap: {
+    width: 90, height: 90, borderRadius: 45,
+    backgroundColor: 'rgba(245,158,11,0.2)',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: 'rgba(245,158,11,0.35)',
+  },
+  summaryTitle: { fontSize: 30, fontWeight: FontWeight.extrabold, color: Colors.textPrimary, letterSpacing: -0.8 },
   summaryTurns: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.medium },
   scoreGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   scoreCard: {
     flex: 1, minWidth: '45%',
-    backgroundColor: Colors.backgroundCard,
+    backgroundColor: 'rgba(255,255,255,0.05)',
     borderRadius: BorderRadius.xl,
     padding: Spacing.lg,
     alignItems: 'center', gap: 6,
-    borderWidth: 1, borderColor: Colors.border,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  scoreBottomBar: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    height: 2.5, opacity: 0.7,
   },
   scoreValue: { fontSize: 38, fontWeight: FontWeight.extrabold, letterSpacing: -1 },
   scoreLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.medium },
   summarySection: {
-    backgroundColor: Colors.backgroundCard,
+    backgroundColor: 'rgba(255,255,255,0.05)',
     borderRadius: BorderRadius.xl,
     padding: Spacing.lg, gap: Spacing.sm,
-    borderWidth: 1, borderColor: Colors.border,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.09)',
   },
   summarySectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   summarySectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary },

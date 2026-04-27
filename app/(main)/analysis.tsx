@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import api from '../../services/api';
 import { Card } from '../../components/ui/Card';
+import { AppBackground } from '../../components/ui/AppBackground';
 import { Colors, FontSize, FontWeight, Spacing, BorderRadius } from '../../constants/theme';
 import { TrendData } from '../../types';
 import { PremiumGate } from '../../components/PremiumGate';
@@ -80,8 +81,9 @@ export default function AnalysisScreen() {
       featureDescription="週ごとの学習進捗・ミスの傾向・AIコーチからのアドバイスで弱点を可視化。継続的な改善をサポートします。"
     >
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+      <AppBackground variant="cool" />
       {/* ── グラデーションヘッダー ── */}
-      <LinearGradient colors={['#059669', '#4F46E5']} style={styles.header} start={{x:0,y:0}} end={{x:1,y:1}}>
+      <LinearGradient colors={['rgba(14,165,233,0.45)', 'rgba(99,102,241,0.32)']} style={styles.header} start={{x:0,y:0}} end={{x:1,y:1}}>
         <View style={styles.headerTop}>
           <View style={styles.headerIconWrap}>
             <Ionicons name="analytics" size={22} color="#fff" />
@@ -108,7 +110,7 @@ export default function AnalysisScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />}
       >
         {/* ── Overview stats ── */}
-        <LinearGradient colors={['#4F46E5', '#7C3AED']} style={styles.overviewCard} start={{x:0,y:0}} end={{x:1,y:1}}>
+        <LinearGradient colors={['#0C4A6E', '#1D4ED8', '#5B21B6']} style={styles.overviewCard} start={{x:0,y:0}} end={{x:1,y:1}}>
           <View style={styles.overviewGrid}>
             {[
               { label: '総会話',   value: overview?.total_sessions ?? 0,                                                  icon: 'chatbubbles' as const,     color: '#818CF8' },
@@ -284,7 +286,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
 
   /* Header */
-  header: { paddingHorizontal: Spacing.md, paddingTop: Spacing.md, paddingBottom: Spacing.lg, gap: Spacing.md },
+  header: { paddingHorizontal: Spacing.md, paddingTop: Spacing.md, paddingBottom: Spacing.lg, gap: Spacing.md, borderBottomWidth: 1, borderBottomColor: 'rgba(56,189,248,0.25)' },
   headerTop: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   headerIconWrap: {
     width: 38, height: 38, borderRadius: 12,
@@ -313,11 +315,13 @@ const styles = StyleSheet.create({
   /* Overview */
   overviewCard: {
     borderRadius: BorderRadius.xl, padding: Spacing.xl,
-    shadowColor: Colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 6,
+    borderWidth: 1, borderColor: 'rgba(56,189,248,0.25)',
+    shadowColor: '#38BDF8',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 8,
+    overflow: 'hidden',
   },
   overviewGrid: { flexDirection: 'row', justifyContent: 'space-around' },
   overviewStat: { alignItems: 'center', gap: 8 },
@@ -338,10 +342,10 @@ const styles = StyleSheet.create({
   /* Weekly */
   weeklyGrid: { flexDirection: 'row', gap: Spacing.sm },
   weekCard: {
-    flex: 1, backgroundColor: Colors.backgroundInput,
+    flex: 1, backgroundColor: 'rgba(255,255,255,0.05)',
     borderRadius: BorderRadius.lg, padding: Spacing.sm,
     alignItems: 'center', gap: 5,
-    borderWidth: 1, borderColor: Colors.border,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)',
   },
   weekLabel: { fontSize: 10, color: Colors.textMuted, fontWeight: FontWeight.medium },
   weekSessions: { fontSize: FontSize.xl, fontWeight: FontWeight.extrabold, color: Colors.primary, letterSpacing: -0.5 },
@@ -363,9 +367,9 @@ const styles = StyleSheet.create({
   topicPills: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   topicPill: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
-    backgroundColor: Colors.backgroundInput, borderRadius: BorderRadius.full,
+    backgroundColor: 'rgba(56,189,248,0.1)', borderRadius: BorderRadius.full,
     paddingVertical: 7, paddingHorizontal: Spacing.md,
-    borderWidth: 1, borderColor: Colors.border,
+    borderWidth: 1, borderColor: 'rgba(56,189,248,0.25)',
   },
   topicPillText: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.medium },
   topicPillCount: { fontSize: FontSize.xs, color: Colors.primary, fontWeight: FontWeight.extrabold },
@@ -374,12 +378,12 @@ const styles = StyleSheet.create({
   suggestionsSection: { gap: Spacing.sm },
   suggestionCard: {
     flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
-    backgroundColor: Colors.backgroundCard, borderRadius: BorderRadius.lg,
+    backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: BorderRadius.lg,
     padding: Spacing.md, paddingLeft: Spacing.md,
     borderLeftWidth: 4,
-    borderTopWidth: 1, borderTopColor: Colors.border,
-    borderRightWidth: 1, borderRightColor: Colors.border,
-    borderBottomWidth: 1, borderBottomColor: Colors.border,
+    borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.07)',
+    borderRightWidth: 1, borderRightColor: 'rgba(255,255,255,0.07)',
+    borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.07)',
   },
   suggestionIconWrap: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   suggestionBody: { flex: 1, gap: 5 },

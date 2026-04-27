@@ -60,6 +60,13 @@
       ],
       "expo-font",
       [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "英会話練習のために音声入力が必要です",
+          "speechRecognitionPermission": "音声を文字に変換するために使用します"
+        }
+      ],
+      [
         "expo-notifications",
         {
           "icon": "./assets/icon.png",

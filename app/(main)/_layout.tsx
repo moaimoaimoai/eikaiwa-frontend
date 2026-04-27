@@ -1,7 +1,8 @@
 import { Tabs } from 'expo-router';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, FontSize } from '../../constants/theme';
+import { LinearGradient } from 'expo-linear-gradient';
 
 interface TabIconProps {
   name: string;
@@ -13,14 +14,17 @@ function TabIcon({ name, label, focused }: TabIconProps) {
   return (
     <View style={styles.tabItem}>
       <View style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}>
+        {focused && (
+          <View style={styles.tabIconGlow} />
+        )}
         <Ionicons
           name={name as any}
-          size={22}
-          color={focused ? Colors.primary : Colors.textMuted}
+          size={21}
+          color={focused ? '#fff' : Colors.textMuted}
         />
       </View>
       <Text
-        style={[styles.tabLabel, { color: focused ? Colors.primary : Colors.textMuted }]}
+        style={[styles.tabLabel, { color: focused ? Colors.primaryLight : Colors.textMuted }]}
         numberOfLines={1}
       >
         {label}
@@ -36,6 +40,11 @@ export default function MainLayout() {
         headerShown: false,
         tabBarStyle: styles.tabBar,
         tabBarShowLabel: false,
+        tabBarBackground: () => (
+          <View style={styles.tabBarBackground}>
+            <View style={styles.tabBarBorderTop} />
+          </View>
+        ),
       }}
     >
       <Tabs.Screen
@@ -55,11 +64,16 @@ export default function MainLayout() {
         options={{
           tabBarIcon: ({ focused }) => (
             <View style={styles.centerTabContainer}>
-              {/* 外側リング */}
-              <View style={[styles.centerTabRing, focused && styles.centerTabRingActive]} />
-              <View style={[styles.centerTab, focused && styles.centerTabActive]}>
+              {/* 外側グロー */}
+              {focused && <View style={styles.centerTabGlow} />}
+              <LinearGradient
+                colors={focused ? ['#7C3AED', '#5B21B6'] : ['#1A1A3E', '#13132E']}
+                style={[styles.centerTab, focused && styles.centerTabActive]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+              >
                 <Ionicons name="mic" size={26} color={focused ? '#fff' : Colors.textMuted} />
-              </View>
+              </LinearGradient>
             </View>
           ),
         }}
@@ -88,17 +102,24 @@ export default function MainLayout() {
 
 const styles = StyleSheet.create({
   tabBar: {
-    backgroundColor: Colors.backgroundSecondary,
-    borderTopColor: Colors.border,
-    borderTopWidth: 0.5,
+    backgroundColor: 'transparent',
+    borderTopWidth: 0,
     height: 88,
-    paddingBottom: 18,
-    paddingTop: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -6 },
-    shadowOpacity: 0.2,
-    shadowRadius: 16,
-    elevation: 16,
+    paddingBottom: Platform.OS === 'ios' ? 20 : 10,
+    paddingTop: 8,
+    elevation: 0,
+  },
+  tabBarBackground: {
+    flex: 1,
+    backgroundColor: 'rgba(10, 10, 30, 0.92)',
+  },
+  tabBarBorderTop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 0.5,
+    backgroundColor: 'rgba(124, 58, 237, 0.3)',
   },
   tabItem: {
     alignItems: 'center',
@@ -106,53 +127,56 @@ const styles = StyleSheet.create({
     minWidth: 56,
   },
   tabIconWrap: {
-    width: 40,
-    height: 32,
-    borderRadius: 10,
+    width: 42,
+    height: 34,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
   },
-  tabIconWrapActive: {
-    backgroundColor: Colors.primary + '18',
+  tabIconGlow: {
+    position: 'absolute',
+    inset: 0,
+    borderRadius: 12,
+    backgroundColor: 'rgba(124, 58, 237, 0.25)',
   },
+  tabIconWrapActive: {},
   tabLabel: {
     fontSize: 10,
     fontWeight: '600',
     letterSpacing: 0.1,
   },
+
+  /* Center tab (mic) */
   centerTabContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 10,
+    marginBottom: 12,
+    position: 'relative',
   },
-  centerTabRing: {
+  centerTabGlow: {
     position: 'absolute',
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-  },
-  centerTabRingActive: {
-    borderColor: Colors.primary + '50',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: 'rgba(124, 58, 237, 0.35)',
+    transform: [{ scale: 1.3 }],
   },
   centerTab: {
     width: 58,
     height: 58,
     borderRadius: 29,
-    backgroundColor: Colors.backgroundCard,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1.5,
-    borderColor: Colors.borderLight,
+    borderColor: 'rgba(167, 139, 250, 0.3)',
   },
   centerTabActive: {
-    backgroundColor: Colors.primary,
-    borderColor: 'transparent',
-    shadowColor: Colors.primary,
+    borderColor: 'rgba(167, 139, 250, 0.5)',
+    shadowColor: '#7C3AED',
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.7,
-    shadowRadius: 18,
-    elevation: 10,
+    shadowOpacity: 0.9,
+    shadowRadius: 20,
+    elevation: 12,
   },
 });

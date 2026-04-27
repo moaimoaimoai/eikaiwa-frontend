@@ -46,9 +46,10 @@ export const phrasesService = {
   },
 
   /** AIが毎回生成する単語カード（重複防止・1日上限付き） */
-  async getAIWords(level?: string): Promise<AIWordResult> {
+  async getAIWords(level?: string, force = false): Promise<AIWordResult> {
     const params: Record<string, string> = {};
     if (level) params.level = level;
+    if (force) params.force = 'true';
     try {
       const response = await api.get('/phrases/ai-words/', { params });
       return {
@@ -73,9 +74,10 @@ export const phrasesService = {
   },
 
   /** AIが毎回生成するウォームアップフレーズ（重複防止・1日上限付き） */
-  async getAIWarmupPhrases(level?: string): Promise<AIWarmupResult> {
+  async getAIWarmupPhrases(level?: string, force = false): Promise<AIWarmupResult> {
     const params: Record<string, string> = {};
     if (level) params.level = level;
+    if (force) params.force = 'true';
     try {
       const response = await api.get('/phrases/ai-warmup/', { params });
       return {

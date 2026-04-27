@@ -15,6 +15,7 @@ import { Card } from '../../components/ui/Card';
 import { Colors, FontSize, FontWeight, Spacing, BorderRadius } from '../../constants/theme';
 import { Phrase } from '../../types';
 import { PremiumGate } from '../../components/PremiumGate';
+import { AppBackground } from '../../components/ui/AppBackground';
 
 const { width } = Dimensions.get('window');
 
@@ -112,11 +113,11 @@ export default function WarmupScreen() {
     }
   };
 
-  /** AI単語をロード（初回 or 再生成ボタン） */
-  const loadAIWords = async () => {
+  /** AI単語をロード。force=true のときのみ新規生成、false なら当日既存データを返す */
+  const loadAIWords = async (force = false) => {
     setWordLoading(true);
     try {
-      const result = await phrasesService.getAIWords();
+      const result = await phrasesService.getAIWords(undefined, force);
       if (result.remaining_today !== null) setWordRemainingToday(result.remaining_today);
       if (result.daily_limit) setWordDailyLimit(result.daily_limit);
 
@@ -141,10 +142,11 @@ export default function WarmupScreen() {
     }
   };
 
-  const loadAIPhrases = async (dbPhraseFallback: Phrase[] = []) => {
+  /** AIフレーズをロード。force=true のときのみ新規生成、false なら当日既存データを返す */
+  const loadAIPhrases = async (dbPhraseFallback: Phrase[] = [], force = false) => {
     try {
       setAILoading(true);
-      const result = await phrasesService.getAIWarmupPhrases();
+      const result = await phrasesService.getAIWarmupPhrases(undefined, force);
 
       if (result.remaining_today !== null) setRemainingToday(result.remaining_today);
       if (result.daily_limit) setDailyLimit(result.daily_limit);
@@ -297,8 +299,9 @@ export default function WarmupScreen() {
       featureDescription="ネイティブが実際に使う厳選フレーズを音声付きで学習。クイズ機能で繰り返しアウトプット練習できます。"
     >
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-      {/* ── グラデーションヘッダー ── */}
-      <LinearGradient colors={['#0891B2', '#4F46E5']} style={styles.header} start={{x:0,y:0}} end={{x:1,y:1}}>
+      <AppBackground variant="cool" />
+      {/* ── グラスヘッダー ── */}
+      <View style={styles.header}>
         <View style={styles.headerTop}>
           <View style={styles.headerIconWrap}>
             <Ionicons name="book" size={22} color="#fff" />
@@ -313,9 +316,9 @@ export default function WarmupScreen() {
               style={[styles.tab, activeTab === tab.id && styles.tabActive]}
               onPress={() => {
                 setActiveTab(tab.id);
-                // 単語タブ初回: AI単語がまだなければロード
+                // 単語タブ初回: AI単語がまだなければロード（既存データ優先）
                 if (tab.id === 'words' && aiWords.length === 0 && !wordLoading) {
-                  loadAIWords();
+                  loadAIWords(false);
                 }
               }}
             >
@@ -330,7 +333,7 @@ export default function WarmupScreen() {
             </TouchableOpacity>
           ))}
         </View>
-      </LinearGradient>
+      </View>
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
         {/* AI生成中（初回のみフルスクリーンローダーを表示） */}
@@ -364,7 +367,7 @@ export default function WarmupScreen() {
             remainingToday={remainingToday}
             dailyLimit={dailyLimit}
             limitReached={limitReached}
-            onReloadAI={loadAIPhrases}
+            onReloadAI={() => loadAIPhrases([], true)}
             reviewedToday={reviewedToday}
             onSpeakAI={speakAIPhrase}
           />
@@ -410,7 +413,7 @@ export default function WarmupScreen() {
               }}
               onNext={nextWord}
               onPrev={prevWord}
-              onReloadWords={loadAIWords}
+              onReloadWords={() => loadAIWords(true)}
             />
           )
         )}
@@ -1000,21 +1003,25 @@ function WordsTab({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
 
-  /* Header */
-  header: { paddingHorizontal: Spacing.md, paddingTop: Spacing.md, paddingBottom: Spacing.lg, gap: Spacing.md },
+  /* Header — glassmorphism */
+  header: {
+    paddingHorizontal: Spacing.md, paddingTop: Spacing.md, paddingBottom: Spacing.lg, gap: Spacing.md,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderBottomWidth: 1, borderBottomColor: 'rgba(14,165,233,0.20)',
+  },
   headerTop: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   headerIconWrap: {
     width: 38, height: 38, borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(14,165,233,0.20)',
     alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
+    borderWidth: 1, borderColor: 'rgba(14,165,233,0.35)',
   },
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.extrabold, color: '#fff', letterSpacing: -0.3 },
 
   /* Tabs */
-  tabs: { flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.25)', borderRadius: BorderRadius.xl, padding: 4, gap: 4 },
+  tabs: { flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.30)', borderRadius: BorderRadius.xl, padding: 4, gap: 4 },
   tab: { flex: 1, paddingVertical: 9, borderRadius: BorderRadius.lg, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 5 },
-  tabActive: { backgroundColor: 'rgba(255,255,255,0.22)' },
+  tabActive: { backgroundColor: 'rgba(14,165,233,0.28)' },
   tabText: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.5)', fontWeight: FontWeight.medium },
   tabTextActive: { color: '#fff', fontWeight: FontWeight.bold },
 
@@ -1032,7 +1039,7 @@ const styles = StyleSheet.create({
 
   /* Phrases Tab */
   phraseTab: { gap: Spacing.md },
-  flipRow: { flexDirection: 'row', gap: 0, alignSelf: 'center', backgroundColor: Colors.backgroundCard, borderRadius: BorderRadius.full, padding: 3, borderWidth: 1, borderColor: Colors.border },
+  flipRow: { flexDirection: 'row', gap: 0, alignSelf: 'center', backgroundColor: 'rgba(255,255,255,0.07)', borderRadius: BorderRadius.full, padding: 3, borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)' },
   flipChip: {
     paddingVertical: 7, paddingHorizontal: Spacing.xl,
     borderRadius: BorderRadius.full,
@@ -1187,14 +1194,14 @@ const styles = StyleSheet.create({
   aiRetryText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold },
   aiPhrasesList: { gap: Spacing.sm },
   aiPhraseCard: {
-    backgroundColor: Colors.backgroundCard,
+    backgroundColor: 'rgba(255,255,255,0.05)',
     borderRadius: BorderRadius.lg,
     padding: Spacing.md,
     gap: 8,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: 'rgba(255,255,255,0.09)',
     borderLeftWidth: 3,
-    borderLeftColor: Colors.primary + '60',
+    borderLeftColor: Colors.primary + '70',
   },
   aiPhraseCardTop: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   aiPhraseIndexBadge: {
@@ -1242,11 +1249,11 @@ const styles = StyleSheet.create({
   reviewedList: { gap: Spacing.sm },
   reviewedItem: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: Colors.backgroundCard,
+    backgroundColor: 'rgba(255,255,255,0.05)',
     borderRadius: BorderRadius.md,
     padding: Spacing.md,
-    borderWidth: 1, borderColor: Colors.border,
-    borderLeftWidth: 3, borderLeftColor: Colors.success + '60',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.09)',
+    borderLeftWidth: 3, borderLeftColor: Colors.success + '70',
   },
   reviewedItemLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   reviewedAIBadge: {

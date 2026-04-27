@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  RefreshControl,
+  RefreshControl, Animated,
 } from 'react-native';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuthStore } from '../../store/authStore';
 import { authService } from '../../services/auth';
-import { Card } from '../../components/ui/Card';
+import { AppBackground } from '../../components/ui/AppBackground';
 import {
   Colors, FontSize, FontWeight, Spacing, BorderRadius,
   TOPICS, getTodayTopic, DailyTopic,
@@ -23,23 +23,63 @@ interface StatsData {
 }
 
 export default function HomeScreen() {
-  const { user, updateUser } = useAuthStore();
+  const { user } = useAuthStore();
   const [stats, setStats] = useState<StatsData | null>(null);
-  const [statsError, setStatsError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // 今日のトピック
-  const todayTopic: DailyTopic = getTodayTopic();
+  // パルスアニメーション（CTAボタン）
+  const pulse1 = useRef(new Animated.Value(1)).current;
+  const pulse2 = useRef(new Animated.Value(1)).current;
+  const pulse1Opacity = useRef(new Animated.Value(0.5)).current;
+  const pulse2Opacity = useRef(new Animated.Value(0.3)).current;
 
+  // フェードイン
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(24)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 600, useNativeDriver: true }),
+    ]).start();
+
+    const loop1 = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(pulse1, { toValue: 1.45, duration: 1700, useNativeDriver: true }),
+          Animated.timing(pulse1Opacity, { toValue: 0, duration: 1700, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(pulse1, { toValue: 1, duration: 0, useNativeDriver: true }),
+          Animated.timing(pulse1Opacity, { toValue: 0.5, duration: 0, useNativeDriver: true }),
+        ]),
+      ])
+    );
+    const loop2 = Animated.loop(
+      Animated.sequence([
+        Animated.delay(850),
+        Animated.parallel([
+          Animated.timing(pulse2, { toValue: 1.45, duration: 1700, useNativeDriver: true }),
+          Animated.timing(pulse2Opacity, { toValue: 0, duration: 1700, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(pulse2, { toValue: 1, duration: 0, useNativeDriver: true }),
+          Animated.timing(pulse2Opacity, { toValue: 0.3, duration: 0, useNativeDriver: true }),
+        ]),
+      ])
+    );
+    loop1.start();
+    loop2.start();
+    return () => { loop1.stop(); loop2.stop(); };
+  }, []);
+
+  const todayTopic: DailyTopic = getTodayTopic();
 
   const loadStats = async () => {
     try {
       const data = await authService.getStats();
       setStats(data);
-      setStatsError(false);
-    } catch {
-      setStatsError(true);
-    }
+    } catch { /* ignore */ }
   };
 
   useEffect(() => { loadStats(); }, []);
@@ -52,114 +92,245 @@ export default function HomeScreen() {
 
   const greeting = () => {
     const h = new Date().getHours();
-    if (h < 12) return 'おはようございます';
-    if (h < 18) return 'こんにちは';
-    return 'こんばんは';
+    if (h < 12) return 'Good Morning ☀️';
+    if (h < 18) return 'Good Afternoon 🌤';
+    return 'Good Evening 🌙';
   };
 
-  const levelEmoji = user?.level === 'beginner' ? '🌱' : user?.level === 'intermediate' ? '🌿' : '🌳';
+  const levelLabel = user?.level === 'beginner' ? 'Beginner'
+    : user?.level === 'intermediate' ? 'Intermediate' : 'Advanced';
+  const levelEmoji = user?.level === 'beginner' ? '🌱'
+    : user?.level === 'intermediate' ? '🌿' : '🌳';
+  const streakDays = user?.streak_days ?? 0;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+      {/* ── 全画面背景 ── */}
+      <AppBackground variant="default" />
+
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primaryLight} />
+        }
+        showsVerticalScrollIndicator={false}
       >
-        {/* ── ヘッダー ── */}
-        <LinearGradient colors={['#4F46E5', '#7C3AED']} style={styles.header} start={{x:0,y:0}} end={{x:1,y:1}}>
+        {/* ══════════════════════════════════
+            ヘッダー — グラスカード
+        ══════════════════════════════════ */}
+        <Animated.View style={[styles.header, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+
+          {/* トップ行: 挨拶 + アバターボタン */}
           <View style={styles.headerTop}>
-            <View>
-              <Text style={styles.greeting}>{greeting()} 👋</Text>
-              <Text style={styles.userName}>{user?.display_name || user?.username || 'ユーザー'}さん</Text>
+            <View style={styles.headerLeft}>
+              <Text style={styles.greeting}>{greeting()}</Text>
+              <Text style={styles.userName}>
+                {user?.display_name || user?.username || 'ユーザー'}
+                <Text style={styles.userNameSuffix}>さん</Text>
+              </Text>
+              <View style={styles.levelPill}>
+                <Text style={styles.levelEmoji}>{levelEmoji}</Text>
+                <Text style={styles.levelText}>{levelLabel}</Text>
+              </View>
             </View>
+
             <TouchableOpacity
               style={styles.avatarButton}
               onPress={() => router.push('/(main)/settings')}
               accessibilityLabel="設定を開く"
               accessibilityRole="button"
             >
-              <Text style={styles.avatarButtonText}>{levelEmoji}</Text>
+              <LinearGradient
+                colors={['rgba(124,58,237,0.55)', 'rgba(91,33,182,0.35)']}
+                style={styles.avatarGradient}
+                start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+              >
+                <Ionicons name="person" size={20} color="rgba(255,255,255,0.92)" />
+              </LinearGradient>
             </TouchableOpacity>
           </View>
 
-          {/* Streak */}
-          <View style={styles.streakBanner}>
-            <Ionicons name="flame" size={20} color="#FB923C" />
-            <Text style={styles.streakText}>{user?.streak_days ?? 0}日連続学習中！</Text>
-            {(user?.streak_days ?? 0) > 0 && (
-              <Text style={styles.streakSub}>継続は力なり ✨</Text>
-            )}
-          </View>
-        </LinearGradient>
-
-        {/* ── Stats ── */}
-        <View style={styles.statsRow}>
-          {[
-            { label: '会話回数', value: stats?.total_conversations ?? user?.total_conversations ?? 0, icon: 'chatbubbles' as const, color: Colors.primary },
-            { label: '練習時間', value: `${stats?.total_minutes ?? user?.total_minutes ?? 0}分`, icon: 'time' as const, color: Colors.secondary },
-            { label: '修正済み', value: stats?.mastered_count ?? 0, icon: 'checkmark-circle' as const, color: Colors.success },
-          ].map((stat, i) => (
-            <Card key={i} style={styles.statCard} variant="glass">
-              <View style={[styles.statIconWrap, { backgroundColor: stat.color + '20' }]}>
-                <Ionicons name={stat.icon} size={20} color={stat.color} />
+          {/* ストリークバナー */}
+          <View style={styles.streakCard}>
+            <LinearGradient
+              colors={['rgba(124,58,237,0.18)', 'rgba(91,33,182,0.08)']}
+              style={StyleSheet.absoluteFill}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+            />
+            <View style={styles.streakLeft}>
+              <View style={styles.streakFlameWrap}>
+                <Ionicons name="flame" size={20} color="#FB923C" />
               </View>
-              <Text style={[styles.statValue, { color: stat.color }]}>{stat.value}</Text>
-              <Text style={styles.statLabel}>{stat.label}</Text>
-            </Card>
-          ))}
-        </View>
-
-        {/* ── 今日のトピック ── */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.todayBadge}>
-              <Text style={styles.todayBadgeText}>TODAY</Text>
+              <View>
+                <Text style={styles.streakDays}>{streakDays}日連続</Text>
+                <Text style={styles.streakSub}>
+                  {streakDays > 0 ? '継続は力なり ✨' : '今日から始めよう！'}
+                </Text>
+              </View>
             </View>
-            <Text style={styles.sectionTitle}>今日のトピック</Text>
+            <View style={styles.streakDots}>
+              {[...Array(7)].map((_, i) => (
+                <View
+                  key={i}
+                  style={[
+                    styles.dot,
+                    i < (streakDays % 7 || (streakDays > 0 ? 7 : 0))
+                      ? styles.dotActive : styles.dotInactive,
+                  ]}
+                />
+              ))}
+            </View>
           </View>
+        </Animated.View>
 
+        {/* ══════════════════════════════════
+            Stats カード (3列)
+        ══════════════════════════════════ */}
+        <Animated.View style={[styles.statsRow, { opacity: fadeAnim }]}>
+          {[
+            {
+              label: '会話回数',
+              value: stats?.total_conversations ?? user?.total_conversations ?? 0,
+              icon: 'chatbubbles' as const,
+              color: '#A78BFA',
+              glow: ['rgba(167,139,250,0.18)', 'rgba(167,139,250,0.04)'] as const,
+            },
+            {
+              label: '練習時間',
+              value: stats?.total_minutes ?? user?.total_minutes ?? 0,
+              icon: 'time' as const,
+              color: '#38BDF8',
+              glow: ['rgba(56,189,248,0.18)', 'rgba(56,189,248,0.04)'] as const,
+              unit: '分',
+            },
+            {
+              label: '修正済み',
+              value: stats?.mastered_count ?? 0,
+              icon: 'checkmark-circle' as const,
+              color: '#34D399',
+              glow: ['rgba(52,211,153,0.18)', 'rgba(52,211,153,0.04)'] as const,
+              unit: '語',
+            },
+          ].map((s, i) => (
+            <View key={i} style={styles.statCard}>
+              <LinearGradient colors={s.glow} style={StyleSheet.absoluteFill} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
+              <View style={[styles.statIconWrap, { backgroundColor: s.color + '22' }]}>
+                <Ionicons name={s.icon} size={16} color={s.color} />
+              </View>
+              <Text style={[styles.statValue, { color: s.color }]}>{s.value}</Text>
+              <Text style={styles.statLabel}>{s.label}</Text>
+              <View style={[styles.statBar, { backgroundColor: s.color }]} />
+            </View>
+          ))}
+        </Animated.View>
+
+        {/* ══════════════════════════════════
+            会話を始める — メイン CTA
+        ══════════════════════════════════ */}
+        <View style={styles.startSection}>
           <TouchableOpacity
-            activeOpacity={0.88}
-            onPress={() => router.push({ pathname: '/(main)/conversation', params: { topic: todayTopic.parentTopic, dailyTopic: todayTopic.id } })}
-            accessibilityLabel={`今日のトピック: ${todayTopic.label}で話す`}
+            onPress={() => router.push('/(main)/conversation')}
+            activeOpacity={0.87}
+            accessibilityLabel="会話を始める"
             accessibilityRole="button"
           >
-            <LinearGradient
-              colors={[todayTopic.color + 'DD', todayTopic.color + '99']}
-              style={styles.todayTopicCard}
-              start={{x:0,y:0}} end={{x:1,y:1}}
-            >
-              {/* 背景装飾 */}
-              <View style={styles.todayTopicBg}>
-                <Text style={styles.todayTopicBgEmoji}>{todayTopic.icon}</Text>
-              </View>
-
-              <View style={styles.todayTopicContent}>
-                <View style={styles.todayTopicIconWrap}>
-                  <Text style={styles.todayTopicEmoji}>{todayTopic.icon}</Text>
+            <View style={styles.startShadow}>
+              <LinearGradient
+                colors={['#6D28D9', '#7C3AED', '#5B21B6']}
+                style={styles.startButton}
+                start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+              >
+                {/* トップグロス */}
+                <LinearGradient
+                  colors={['rgba(255,255,255,0.18)', 'rgba(255,255,255,0)']}
+                  style={styles.startGloss}
+                  start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }}
+                />
+                <View style={styles.startInner}>
+                  {/* パルスリング + マイク */}
+                  <View style={styles.micContainer}>
+                    <Animated.View style={[styles.pulseRing, { transform: [{ scale: pulse2 }], opacity: pulse2Opacity }]} />
+                    <Animated.View style={[styles.pulseRing, { transform: [{ scale: pulse1 }], opacity: pulse1Opacity }]} />
+                    <View style={styles.micCircle}>
+                      <Ionicons name="mic" size={28} color="#fff" />
+                    </View>
+                  </View>
+                  <View style={styles.startText}>
+                    <Text style={styles.startTitle}>会話を始める</Text>
+                    <Text style={styles.startSub}>アバター・トピックを選んで話す</Text>
+                  </View>
+                  <View style={styles.startArrow}>
+                    <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.8)" />
+                  </View>
                 </View>
-                <View style={styles.todayTopicTexts}>
-                  <Text style={styles.todayTopicLabel}>{todayTopic.label}</Text>
-                  <Text style={styles.todayTopicHint}>{todayTopic.hint}</Text>
-                </View>
-              </View>
-
-              <View style={styles.todayTopicFooter}>
-                <View style={styles.todayTopicChip}>
-                  <Ionicons name="sparkles" size={11} color="#fff" />
-                  <Text style={styles.todayTopicChipText}>今日のおすすめ</Text>
-                </View>
-                <View style={styles.todayTopicStartBtn}>
-                  <Text style={styles.todayTopicStartText}>このトピックで話す</Text>
-                  <Ionicons name="arrow-forward" size={14} color="#fff" />
-                </View>
-              </View>
-            </LinearGradient>
+              </LinearGradient>
+            </View>
           </TouchableOpacity>
         </View>
 
-        {/* ── OR 区切り ── */}
+        {/* ══════════════════════════════════
+            今日のおすすめトピック
+        ══════════════════════════════════ */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <View style={styles.todayBadge}>
+              <Ionicons name="sparkles" size={9} color="#fff" />
+              <Text style={styles.todayBadgeText}>TODAY</Text>
+            </View>
+            <Text style={styles.sectionTitle}>今日のおすすめ</Text>
+          </View>
+
+          <TouchableOpacity
+            activeOpacity={0.87}
+            onPress={() => router.push({
+              pathname: '/(main)/conversation',
+              params: { topic: todayTopic.parentTopic, dailyTopic: todayTopic.id },
+            })}
+            accessibilityLabel={`今日のトピック: ${todayTopic.label}で話す`}
+            accessibilityRole="button"
+          >
+            <View style={[styles.todayCardWrap, { shadowColor: todayTopic.color }]}>
+              <LinearGradient
+                colors={[todayTopic.color, todayTopic.color + 'BB']}
+                style={styles.todayCard}
+                start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+              >
+                <LinearGradient
+                  colors={['rgba(255,255,255,0.22)', 'rgba(255,255,255,0)']}
+                  style={styles.todayGloss}
+                  start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }}
+                />
+                <Text style={styles.todayBgEmoji}>{todayTopic.icon}</Text>
+
+                <View style={styles.todayCardTop}>
+                  <View style={styles.todayIconBox}>
+                    <Text style={{ fontSize: 34 }}>{todayTopic.icon}</Text>
+                  </View>
+                  <View style={{ flex: 1, gap: 6 }}>
+                    <Text style={styles.todayLabel}>{todayTopic.label}</Text>
+                    <Text style={styles.todayHint}>{todayTopic.hint}</Text>
+                  </View>
+                </View>
+
+                <View style={styles.todayCardBottom}>
+                  <View style={styles.todayChip}>
+                    <Ionicons name="radio" size={10} color="#fff" />
+                    <Text style={styles.todayChipText}>デイリーピック</Text>
+                  </View>
+                  <View style={styles.todayStartBtn}>
+                    <Text style={styles.todayStartText}>このトピックで話す</Text>
+                    <Ionicons name="arrow-forward" size={13} color="#fff" />
+                  </View>
+                </View>
+              </LinearGradient>
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        {/* ══════════════════════════════════
+            OR 区切り
+        ══════════════════════════════════ */}
         <View style={styles.orDivider}>
           <View style={styles.orLine} />
           <View style={styles.orBadge}>
@@ -168,119 +339,112 @@ export default function HomeScreen() {
           <View style={styles.orLine} />
         </View>
 
-        {/* ── 会話を始める（トピック自由） ── */}
-        <View style={styles.startSection}>
-          <TouchableOpacity
-            onPress={() => router.push('/(main)/conversation')}
-            activeOpacity={0.9}
-            accessibilityLabel="会話を始める"
-            accessibilityRole="button"
-          >
-            <LinearGradient
-              colors={['#4F46E5', '#7C3AED', '#9333EA']}
-              style={styles.startButton}
-              start={{x:0,y:0}} end={{x:1,y:1}}
-            >
-              <View style={styles.startButtonGloss} />
-              <View style={styles.startButtonInner}>
-                <View style={styles.startButtonLeft}>
-                  <View style={styles.startMicRing}>
-                    <View style={styles.startMicCore}>
-                      <Ionicons name="mic" size={28} color="#fff" />
-                    </View>
-                  </View>
-                </View>
-                <View style={styles.startButtonCenter}>
-                  <Text style={styles.startButtonTitle}>会話を始める</Text>
-                  <Text style={styles.startButtonSub}>トピック・アバターを自由に選んで話す</Text>
-                </View>
-                <View style={styles.startButtonArrow}>
-                  <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.8)" />
-                </View>
-              </View>
-            </LinearGradient>
-          </TouchableOpacity>
-        </View>
-
-        {/* ── トピック ── */}
+        {/* ══════════════════════════════════
+            トピックグリッド
+        ══════════════════════════════════ */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Ionicons name="apps" size={18} color={Colors.textSecondary} />
+            <View style={[styles.sectionIconWrap, { backgroundColor: 'rgba(124,58,237,0.22)' }]}>
+              <Ionicons name="apps" size={14} color={Colors.primaryLight} />
+            </View>
             <Text style={styles.sectionTitle}>トピックを選んで練習</Text>
           </View>
           <View style={styles.topicsGrid}>
             {TOPICS.map((topic) => (
               <TouchableOpacity
                 key={topic.id}
-                style={[styles.topicCard, { borderColor: topic.color + '50' }]}
+                style={styles.topicCard}
                 onPress={() => router.push({ pathname: '/(main)/conversation', params: { topic: topic.id } })}
-                activeOpacity={0.8}
+                activeOpacity={0.78}
               >
-                <View style={[styles.topicIcon, { backgroundColor: topic.color + '25' }]}>
-                  <Text style={styles.topicEmoji}>{topic.icon}</Text>
-                </View>
-                <Text style={styles.topicLabel}>{topic.label}</Text>
+                <LinearGradient
+                  colors={[topic.color + '22', topic.color + '08']}
+                  style={styles.topicGradient}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                >
+                  <View style={[styles.topicIconWrap, { backgroundColor: topic.color + '2E' }]}>
+                    <Text style={{ fontSize: 26 }}>{topic.icon}</Text>
+                  </View>
+                  <Text style={styles.topicLabel}>{topic.label}</Text>
+                </LinearGradient>
+                <View style={[styles.topicAccent, { backgroundColor: topic.color }]} />
               </TouchableOpacity>
             ))}
           </View>
         </View>
 
-        {/* ── 学習メニュー ── */}
+        {/* ══════════════════════════════════
+            学習メニュー
+        ══════════════════════════════════ */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Ionicons name="grid" size={18} color={Colors.textSecondary} />
+            <View style={[styles.sectionIconWrap, { backgroundColor: 'rgba(56,189,248,0.22)' }]}>
+              <Ionicons name="grid" size={14} color="#38BDF8" />
+            </View>
             <Text style={styles.sectionTitle}>学習メニュー</Text>
           </View>
-          <View style={styles.quickLinks}>
+          <View style={styles.menuList}>
             {[
-              { title: 'ウォームアップ', desc: '今日のフレーズ10選', icon: 'book' as const, color: '#0891B2', route: '/(main)/warmup' },
-              { title: '単語クイズ', desc: 'ミスを復習しよう', icon: 'library' as const, color: '#D97706', route: '/(main)/vocabulary' },
-              { title: '傾向分析', desc: '弱点を把握しよう', icon: 'bar-chart' as const, color: '#059669', route: '/(main)/analysis' },
+              { title: 'ウォームアップ', desc: '今日のフレーズ10選', icon: 'book' as const,      color: '#38BDF8', glow: ['rgba(56,189,248,0.14)','rgba(56,189,248,0.04)'] as const, route: '/(main)/warmup'      },
+              { title: '単語クイズ',     desc: 'ミスを復習しよう',   icon: 'library' as const,   color: '#F59E0B', glow: ['rgba(245,158,11,0.14)','rgba(245,158,11,0.04)'] as const, route: '/(main)/vocabulary'  },
+              { title: '傾向分析',       desc: '弱点を把握しよう',   icon: 'bar-chart' as const,  color: '#34D399', glow: ['rgba(52,211,153,0.14)','rgba(52,211,153,0.04)'] as const, route: '/(main)/analysis'    },
             ].map((item, i) => (
               <TouchableOpacity
                 key={i}
-                style={styles.quickLink}
+                style={styles.menuItem}
                 onPress={() => router.push(item.route as any)}
-                activeOpacity={0.8}
+                activeOpacity={0.78}
               >
-                <View style={[styles.quickLinkIcon, { backgroundColor: item.color + '20' }]}>
-                  <Ionicons name={item.icon} size={22} color={item.color} />
+                <LinearGradient colors={item.glow} style={StyleSheet.absoluteFill} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} />
+                <View style={[styles.menuAccentBar, { backgroundColor: item.color }]} />
+                <View style={[styles.menuIconWrap, { backgroundColor: item.color + '22' }]}>
+                  <Ionicons name={item.icon} size={20} color={item.color} />
                 </View>
-                <View style={styles.quickLinkText}>
-                  <Text style={styles.quickLinkTitle}>{item.title}</Text>
-                  <Text style={styles.quickLinkDesc}>{item.desc}</Text>
+                <View style={styles.menuTextBlock}>
+                  <Text style={styles.menuTitle}>{item.title}</Text>
+                  <Text style={styles.menuDesc}>{item.desc}</Text>
                 </View>
-                <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+                <View style={[styles.menuChevron, { backgroundColor: item.color + '18' }]}>
+                  <Ionicons name="chevron-forward" size={15} color={item.color + 'CC'} />
+                </View>
               </TouchableOpacity>
             ))}
           </View>
         </View>
 
-        {/* ── ミス復習バナー ── */}
+        {/* ══════════════════════════════════
+            ミス復習バナー
+        ══════════════════════════════════ */}
         {stats && stats.mistake_count > 0 && (
           <TouchableOpacity
             onPress={() => router.push('/(main)/vocabulary')}
-            activeOpacity={0.9}
-            style={styles.mistakesBannerWrap}
+            activeOpacity={0.87}
+            style={styles.mistakesWrap}
             accessibilityLabel={`${Math.max(0, stats.mistake_count - stats.mastered_count)}個のミスを復習する`}
             accessibilityRole="button"
           >
-            <Card style={styles.mistakesBanner} variant="outlined">
-              <View style={styles.mistakesBannerContent}>
-                <View style={styles.mistakesIconWrap}>
-                  <Ionicons name="document-text" size={26} color={Colors.warning} />
-                </View>
-                <View style={styles.mistakesText}>
-                  <Text style={styles.mistakesTitle}>
-                    {Math.max(0, stats.mistake_count - stats.mastered_count)}個のミスを復習しよう
-                  </Text>
-                  <Text style={styles.mistakesDesc}>単語帳でクイズに挑戦！</Text>
-                </View>
-                <View style={styles.mistakesBadge}>
-                  <Text style={styles.mistakesBadgeText}>{stats.mastered_count}/{stats.mistake_count}</Text>
-                </View>
+            <View style={styles.mistakesCard}>
+              <LinearGradient
+                colors={['rgba(245,158,11,0.14)', 'rgba(245,158,11,0.04)']}
+                style={StyleSheet.absoluteFill}
+                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+              />
+              <View style={styles.mistakesAccentBar} />
+              <View style={styles.mistakesIconWrap}>
+                <Ionicons name="warning" size={20} color={Colors.warning} />
               </View>
-            </Card>
+              <View style={styles.mistakesTextBlock}>
+                <Text style={styles.mistakesTitle}>
+                  {Math.max(0, stats.mistake_count - stats.mastered_count)}個のミスを復習しよう
+                </Text>
+                <Text style={styles.mistakesDesc}>単語帳でクイズに挑戦！</Text>
+              </View>
+              <View style={styles.mistakesBadge}>
+                <Text style={styles.mistakesBadgeNum}>{stats.mastered_count}</Text>
+                <View style={styles.mistakesBadgeDivider} />
+                <Text style={styles.mistakesBadgeTotal}>{stats.mistake_count}</Text>
+              </View>
+            </View>
           </TouchableOpacity>
         )}
       </ScrollView>
@@ -293,226 +457,332 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: { paddingBottom: 140 },
 
-  /* Header */
-  header: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.lg, paddingBottom: Spacing.xl, gap: Spacing.md },
+  /* ── ヘッダー (グラスカード) ── */
+  header: {
+    marginHorizontal: Spacing.md,
+    marginTop: Spacing.md,
+    borderRadius: BorderRadius.xl,
+    borderWidth: 1,
+    borderColor: 'rgba(167,139,250,0.32)',
+    backgroundColor: 'rgba(255,255,255,0.13)',
+    padding: Spacing.lg,
+    gap: Spacing.md,
+    overflow: 'hidden',
+  },
   headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  greeting: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.75)', fontWeight: FontWeight.medium, letterSpacing: 0.2 },
-  userName: { fontSize: 28, fontWeight: FontWeight.extrabold, color: '#fff', marginTop: 3, letterSpacing: -0.5 },
+  headerLeft: { gap: 7 },
+  greeting: {
+    fontSize: FontSize.sm,
+    color: 'rgba(255,255,255,0.5)',
+    fontWeight: FontWeight.medium,
+    letterSpacing: 0.4,
+  },
+  userName: {
+    fontSize: 30,
+    fontWeight: FontWeight.extrabold,
+    color: '#fff',
+    letterSpacing: -0.9,
+  },
+  userNameSuffix: {
+    fontSize: 20,
+    fontWeight: FontWeight.semibold,
+    color: 'rgba(255,255,255,0.75)',
+  },
+  levelPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(124,58,237,0.28)',
+    borderRadius: BorderRadius.full,
+    paddingHorizontal: 12, paddingVertical: 5,
+    borderWidth: 1, borderColor: 'rgba(167,139,250,0.35)',
+  },
+  levelEmoji: { fontSize: 12 },
+  levelText: {
+    fontSize: FontSize.xs,
+    color: Colors.primaryLight,
+    fontWeight: FontWeight.bold,
+    letterSpacing: 0.3,
+  },
   avatarButton: {
-    width: 50, height: 50, borderRadius: 25,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.25)',
+    width: 46, height: 46, borderRadius: 23,
+    overflow: 'hidden',
+    borderWidth: 1.5, borderColor: 'rgba(167,139,250,0.4)',
   },
-  avatarButtonText: { fontSize: 24 },
-  streakBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderRadius: BorderRadius.lg,
-    paddingHorizontal: Spacing.md, paddingVertical: 10,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
-  },
-  streakText: { fontSize: FontSize.sm, color: '#fff', fontWeight: FontWeight.semibold, flex: 1 },
-  streakSub: { fontSize: FontSize.xs, color: 'rgba(255,255,255,0.65)' },
+  avatarGradient: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
-  /* Stats */
+  /* ストリークカード */
+  streakCard: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderRadius: BorderRadius.lg,
+    paddingHorizontal: Spacing.md, paddingVertical: 13,
+    borderWidth: 1, borderColor: 'rgba(124,58,237,0.25)',
+    overflow: 'hidden',
+  },
+  streakLeft: { flexDirection: 'row', alignItems: 'center', gap: 11 },
+  streakFlameWrap: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: 'rgba(251,146,60,0.18)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  streakDays: { fontSize: FontSize.md, color: '#fff', fontWeight: FontWeight.bold, letterSpacing: -0.3 },
+  streakSub: { fontSize: FontSize.xs, color: 'rgba(255,255,255,0.5)', marginTop: 1 },
+  streakDots: { flexDirection: 'row', gap: 5 },
+  dot: { width: 9, height: 9, borderRadius: 5 },
+  dotActive: { backgroundColor: '#FB923C' },
+  dotInactive: { backgroundColor: 'rgba(255,255,255,0.13)' },
+
+  /* ── Stats ── */
   statsRow: {
     flexDirection: 'row', gap: Spacing.sm,
     paddingHorizontal: Spacing.md, marginTop: Spacing.md,
   },
-  statCard: { flex: 1, alignItems: 'center', gap: 7, paddingVertical: 18, paddingHorizontal: 4 },
-  statIconWrap: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
-  statValue: { fontSize: FontSize.xxl, fontWeight: FontWeight.extrabold, letterSpacing: -0.5 },
-  statLabel: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.medium },
-
-  /* Section */
-  section: { paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, gap: Spacing.md, marginTop: Spacing.xs },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-
-  /* TODAY badge */
-  todayBadge: {
-    backgroundColor: Colors.warning,
-    borderRadius: 6,
-    paddingHorizontal: 8, paddingVertical: 3,
-    shadowColor: Colors.warning,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.4,
-    shadowRadius: 4,
-    elevation: 2,
+  statCard: {
+    flex: 1,
+    borderRadius: BorderRadius.lg,
+    paddingVertical: 18, paddingHorizontal: 8,
+    alignItems: 'center', gap: 7,
+    overflow: 'hidden',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+    position: 'relative',
   },
-  todayBadgeText: { fontSize: 9, fontWeight: FontWeight.extrabold, color: '#fff', letterSpacing: 1.2 },
+  statIconWrap: {
+    width: 32, height: 32, borderRadius: 10,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  statValue: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.extrabold,
+    letterSpacing: -0.8,
+  },
+  statLabel: { fontSize: 10, color: Colors.textMuted, fontWeight: FontWeight.semibold },
+  statBar: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    height: 2, opacity: 0.65,
+  },
+
+  /* ── CTA ── */
+  startSection: { paddingHorizontal: Spacing.md, marginTop: Spacing.md },
+  startShadow: {
+    borderRadius: BorderRadius.xl,
+    shadowColor: '#7C3AED',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.6,
+    shadowRadius: 26,
+    elevation: 18,
+  },
+  startButton: {
+    borderRadius: BorderRadius.xl,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(167,139,250,0.32)',
+  },
+  startGloss: {
+    position: 'absolute', top: 0, left: 0, right: 0, height: '45%',
+    borderTopLeftRadius: BorderRadius.xl,
+    borderTopRightRadius: BorderRadius.xl,
+  },
+  startInner: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 24, paddingHorizontal: 22, gap: 18,
+  },
+  micContainer: { width: 72, height: 72, alignItems: 'center', justifyContent: 'center' },
+  pulseRing: {
+    position: 'absolute',
+    width: 72, height: 72, borderRadius: 36,
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.5)',
+  },
+  micCircle: {
+    width: 58, height: 58, borderRadius: 29,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.3)',
+  },
+  startText: { flex: 1, gap: 5 },
+  startTitle: {
+    fontSize: FontSize.xxl, fontWeight: FontWeight.extrabold,
+    color: '#fff', letterSpacing: -0.6,
+  },
+  startSub: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.65)', lineHeight: 18 },
+  startArrow: {
+    width: 34, height: 34, borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+
+  /* ── Section ── */
+  section: { paddingHorizontal: Spacing.md, paddingTop: Spacing.lg, gap: Spacing.md },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  sectionIconWrap: { width: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  sectionTitle: {
+    fontSize: FontSize.lg, fontWeight: FontWeight.bold,
+    color: Colors.textPrimary, letterSpacing: -0.2,
+  },
+  todayBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: '#F59E0B',
+    borderRadius: 7,
+    paddingHorizontal: 9, paddingVertical: 4,
+    shadowColor: '#F59E0B',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.55,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  todayBadgeText: { fontSize: 9, fontWeight: FontWeight.extrabold, color: '#fff', letterSpacing: 1.4 },
 
   /* 今日のトピックカード */
-  todayTopicCard: {
+  todayCardWrap: {
+    borderRadius: BorderRadius.xl,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.45,
+    shadowRadius: 22,
+    elevation: 12,
+  },
+  todayCard: {
     borderRadius: BorderRadius.xl,
     padding: Spacing.lg,
     gap: Spacing.md,
     overflow: 'hidden',
-    minHeight: 150,
+    minHeight: 155,
     justifyContent: 'space-between',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
   },
-  todayTopicBg: {
-    position: 'absolute', right: -16, top: -16,
-    opacity: 0.12,
+  todayGloss: {
+    position: 'absolute', top: 0, left: 0, right: 0, height: '40%',
+    borderTopLeftRadius: BorderRadius.xl,
+    borderTopRightRadius: BorderRadius.xl,
   },
-  todayTopicBgEmoji: { fontSize: 110 },
-  todayTopicContent: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  todayTopicIconWrap: {
-    width: 68, height: 68, borderRadius: 22,
-    backgroundColor: 'rgba(255,255,255,0.22)',
+  todayBgEmoji: {
+    position: 'absolute', right: -8, top: -8,
+    fontSize: 115, opacity: 0.11,
+  },
+  todayCardTop: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  todayIconBox: {
+    width: 64, height: 64, borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.2)',
     alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)',
   },
-  todayTopicEmoji: { fontSize: 36 },
-  todayTopicTexts: { flex: 1, gap: 6 },
-  todayTopicLabel: { fontSize: FontSize.xl, fontWeight: FontWeight.extrabold, color: '#fff', lineHeight: 27, letterSpacing: -0.3 },
-  todayTopicHint: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.82)', lineHeight: 18 },
-  todayTopicFooter: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+  todayLabel: {
+    fontSize: FontSize.xl, fontWeight: FontWeight.extrabold,
+    color: '#fff', letterSpacing: -0.4, lineHeight: 26,
   },
-  todayTopicChip: {
+  todayHint: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.78)', lineHeight: 18 },
+  todayCardBottom: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  todayChip: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     backgroundColor: 'rgba(255,255,255,0.18)',
     borderRadius: BorderRadius.full,
     paddingHorizontal: 12, paddingVertical: 5,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
   },
-  todayTopicChipText: { fontSize: FontSize.xs, color: '#fff', fontWeight: FontWeight.semibold },
-  todayTopicStartBtn: {
+  todayChipText: { fontSize: FontSize.xs, color: '#fff', fontWeight: FontWeight.semibold },
+  todayStartBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: 'rgba(0,0,0,0.28)',
+    backgroundColor: 'rgba(0,0,0,0.22)',
     borderRadius: BorderRadius.full,
     paddingHorizontal: 16, paddingVertical: 8,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
   },
-  todayTopicStartText: { fontSize: FontSize.sm, color: '#fff', fontWeight: FontWeight.bold },
+  todayStartText: { fontSize: FontSize.sm, color: '#fff', fontWeight: FontWeight.bold },
 
   /* OR 区切り */
   orDivider: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: Spacing.md, marginVertical: Spacing.xs,
+    paddingHorizontal: Spacing.md, marginTop: Spacing.lg, gap: Spacing.md,
   },
-  orLine: { flex: 1, height: 1, backgroundColor: Colors.border },
+  orLine: { flex: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.08)' },
   orBadge: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 5,
-    backgroundColor: Colors.backgroundSecondary,
+    paddingHorizontal: 12, paddingVertical: 4,
     borderRadius: BorderRadius.full,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginHorizontal: Spacing.sm,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
   },
   orText: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.medium },
 
-  /* 会話を始めるボタン */
-  startSection: { paddingHorizontal: Spacing.md, gap: Spacing.sm },
-  startButton: {
-    borderRadius: BorderRadius.xl,
-    overflow: 'hidden',
-    shadowColor: '#4F46E5',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.55,
-    shadowRadius: 20,
-    elevation: 12,
-  },
-  startButtonGloss: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0,
-    height: '45%',
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderTopLeftRadius: BorderRadius.xl,
-    borderTopRightRadius: BorderRadius.xl,
-  },
-  startButtonInner: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 22,
-    paddingHorizontal: Spacing.xl,
-    gap: Spacing.md,
-  },
-  startButtonLeft: {},
-  startMicRing: {
-    width: 70, height: 70, borderRadius: 35,
-    backgroundColor: 'rgba(255,255,255,0.13)',
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.25)',
-  },
-  startMicCore: {
-    width: 54, height: 54, borderRadius: 27,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  startButtonCenter: { flex: 1, gap: 5 },
-  startButtonTitle: { fontSize: FontSize.xxl, fontWeight: FontWeight.extrabold, color: '#fff', letterSpacing: -0.5 },
-  startButtonSub: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.72)' },
-  startButtonArrow: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: 'rgba(255,255,255,0.13)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-
-  /* クイックスタート */
-  quickStartRow: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    backgroundColor: Colors.backgroundCard,
-    borderRadius: BorderRadius.lg,
-    paddingHorizontal: Spacing.md, paddingVertical: 12,
-    borderWidth: 1, borderColor: Colors.border,
-  },
-  quickStartEmoji: { fontSize: 18 },
-  quickStartText: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.medium },
-
-  /* Topics */
-  topicsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  /* トピックグリッド */
+  topicsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   topicCard: {
-    width: '30.5%', alignItems: 'center', gap: Spacing.xs,
-    backgroundColor: Colors.backgroundCard,
+    width: '30.8%',
     borderRadius: BorderRadius.lg,
-    paddingVertical: Spacing.md, paddingHorizontal: Spacing.xs,
+    overflow: 'hidden',
     borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.09)',
+    position: 'relative',
   },
-  topicIcon: { width: 54, height: 54, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
-  topicEmoji: { fontSize: 28 },
-  topicLabel: { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: FontWeight.semibold, textAlign: 'center' },
+  topicGradient: { alignItems: 'center', gap: 8, paddingVertical: 18, paddingHorizontal: 4 },
+  topicIconWrap: { width: 50, height: 50, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  topicLabel: {
+    fontSize: FontSize.xs, color: Colors.textSecondary,
+    fontWeight: FontWeight.semibold, textAlign: 'center',
+  },
+  topicAccent: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 2, opacity: 0.65 },
 
-  /* Quick links */
-  quickLinks: { gap: 10 },
-  quickLink: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    backgroundColor: Colors.backgroundCard,
+  /* 学習メニュー */
+  menuList: { gap: 10 },
+  menuItem: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
     borderRadius: BorderRadius.lg,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 15,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    paddingHorizontal: Spacing.md, paddingVertical: 17,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+    overflow: 'hidden',
+    position: 'relative',
   },
-  quickLinkIcon: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
-  quickLinkText: { flex: 1 },
-  quickLinkTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary, letterSpacing: -0.2 },
-  quickLinkDesc: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
-
-  /* Mistakes banner */
-  mistakesBannerWrap: { marginHorizontal: Spacing.md, marginTop: Spacing.sm },
-  mistakesBanner: {},
-  mistakesBannerContent: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  mistakesIconWrap: {
-    width: 50, height: 50, borderRadius: 16,
-    backgroundColor: Colors.warning + '20',
+  menuAccentBar: {
+    position: 'absolute', left: 0, top: 0, bottom: 0, width: 3,
+    borderTopLeftRadius: BorderRadius.lg,
+    borderBottomLeftRadius: BorderRadius.lg,
+  },
+  menuIconWrap: {
+    width: 46, height: 46, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+    marginLeft: 7,
+  },
+  menuTextBlock: { flex: 1 },
+  menuTitle: {
+    fontSize: FontSize.md, fontWeight: FontWeight.semibold,
+    color: Colors.textPrimary, letterSpacing: -0.2,
+  },
+  menuDesc: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  menuChevron: {
+    width: 30, height: 30, borderRadius: 10,
     alignItems: 'center', justifyContent: 'center',
   },
-  mistakesText: { flex: 1 },
+
+  /* ミス復習バナー */
+  mistakesWrap: { marginHorizontal: Spacing.md, marginTop: Spacing.md },
+  mistakesCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    borderRadius: BorderRadius.lg,
+    paddingHorizontal: Spacing.md, paddingVertical: 17,
+    borderWidth: 1, borderColor: 'rgba(245,158,11,0.28)',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  mistakesAccentBar: {
+    position: 'absolute', left: 0, top: 0, bottom: 0, width: 3,
+    backgroundColor: Colors.warning,
+    borderTopLeftRadius: BorderRadius.lg,
+    borderBottomLeftRadius: BorderRadius.lg,
+  },
+  mistakesIconWrap: {
+    width: 44, height: 44, borderRadius: 14,
+    backgroundColor: 'rgba(245,158,11,0.18)',
+    alignItems: 'center', justifyContent: 'center',
+    marginLeft: 7,
+  },
+  mistakesTextBlock: { flex: 1 },
   mistakesTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   mistakesDesc: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
   mistakesBadge: {
-    backgroundColor: Colors.primary + '20',
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(245,158,11,0.16)',
     borderRadius: BorderRadius.full,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 5,
-    borderWidth: 1,
-    borderColor: Colors.primary + '40',
+    paddingHorizontal: 12, paddingVertical: 7,
+    borderWidth: 1, borderColor: 'rgba(245,158,11,0.32)',
   },
-  mistakesBadgeText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.bold },
+  mistakesBadgeNum: { fontSize: FontSize.sm, color: Colors.warning, fontWeight: FontWeight.extrabold },
+  mistakesBadgeDivider: { width: 1, height: 12, backgroundColor: 'rgba(245,158,11,0.38)' },
+  mistakesBadgeTotal: { fontSize: FontSize.sm, color: 'rgba(245,158,11,0.68)', fontWeight: FontWeight.semibold },
 });

@@ -13,6 +13,7 @@ import { Card } from '../../components/ui/Card';
 import { Colors, FontSize, FontWeight, Spacing, BorderRadius } from '../../constants/theme';
 import { Mistake, QuizQuestion, SavedPhrase } from '../../types';
 import { PremiumGate } from '../../components/PremiumGate';
+import { AppBackground } from '../../components/ui/AppBackground';
 
 type Tab = 'list' | 'quiz' | 'phrases';
 
@@ -178,8 +179,9 @@ export default function VocabularyScreen() {
       featureDescription="AI会話で出てきたミスや便利フレーズを自動収集。クイズで繰り返し練習して定着させよう。"
     >
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-      {/* ── グラデーションヘッダー ── */}
-      <LinearGradient colors={['#D97706', '#7C3AED']} style={styles.header} start={{x:0,y:0}} end={{x:1,y:1}}>
+      <AppBackground variant="warm" />
+      {/* ── グラスヘッダー ── */}
+      <View style={styles.header}>
         <View style={styles.headerTop}>
           <View style={styles.headerIconWrap}>
             <Ionicons name="library" size={22} color="#fff" />
@@ -205,7 +207,7 @@ export default function VocabularyScreen() {
             </TouchableOpacity>
           ))}
         </View>
-      </LinearGradient>
+      </View>
 
       {loading ? (
         <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 80 }} />
@@ -574,19 +576,23 @@ export default function VocabularyScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
 
-  /* Header */
-  header: { paddingHorizontal: Spacing.md, paddingTop: Spacing.md, paddingBottom: Spacing.lg, gap: Spacing.md },
+  /* Header — glassmorphism */
+  header: {
+    paddingHorizontal: Spacing.md, paddingTop: Spacing.md, paddingBottom: Spacing.lg, gap: Spacing.md,
+    backgroundColor: 'rgba(255,255,255,0.13)',
+    borderBottomWidth: 1, borderBottomColor: 'rgba(245,158,11,0.32)',
+  },
   headerTop: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   headerIconWrap: {
     width: 38, height: 38, borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(245,158,11,0.20)',
     alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
+    borderWidth: 1, borderColor: 'rgba(245,158,11,0.35)',
   },
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.extrabold, color: '#fff', letterSpacing: -0.3 },
-  tabs: { flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.25)', borderRadius: BorderRadius.xl, padding: 4, gap: 4 },
+  tabs: { flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.30)', borderRadius: BorderRadius.xl, padding: 4, gap: 4 },
   tab: { flex: 1, paddingVertical: 9, borderRadius: BorderRadius.lg, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 5 },
-  tabActive: { backgroundColor: 'rgba(255,255,255,0.22)' },
+  tabActive: { backgroundColor: 'rgba(245,158,11,0.28)' },
   tabText: { fontSize: FontSize.xs, color: 'rgba(255,255,255,0.5)', fontWeight: FontWeight.medium },
   tabTextActive: { color: '#fff', fontWeight: FontWeight.bold },
 
@@ -603,8 +609,8 @@ const styles = StyleSheet.create({
   /* Filters */
   filtersScroll: { marginBottom: 4 },
   filters: { flexDirection: 'row', gap: Spacing.sm },
-  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 6, paddingHorizontal: Spacing.md, borderRadius: BorderRadius.full, backgroundColor: Colors.backgroundCard, borderWidth: 1, borderColor: Colors.border },
-  filterChipActive: { backgroundColor: Colors.primary + '20', borderColor: Colors.primary },
+  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 6, paddingHorizontal: Spacing.md, borderRadius: BorderRadius.full, backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)' },
+  filterChipActive: { backgroundColor: Colors.primary + '25', borderColor: Colors.primary + '80' },
   filterChipSuccess: { backgroundColor: Colors.success + '20', borderColor: Colors.success },
   filterText: { fontSize: FontSize.xs, color: Colors.textMuted },
   filterTextActive: { color: Colors.primary, fontWeight: FontWeight.semibold },
@@ -618,8 +624,8 @@ const styles = StyleSheet.create({
 
   /* Mistake cards */
   mistakeCard: {
-    backgroundColor: Colors.backgroundCard, borderRadius: BorderRadius.lg,
-    padding: Spacing.md, gap: Spacing.sm, borderWidth: 1, borderColor: Colors.border,
+    backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: BorderRadius.lg,
+    padding: Spacing.md, gap: Spacing.sm, borderWidth: 1, borderColor: 'rgba(255,255,255,0.09)',
     borderLeftWidth: 3, borderLeftColor: Colors.error,
   },
   mistakeCardMastered: { opacity: 0.5, borderLeftColor: Colors.success },
@@ -653,8 +659,8 @@ const styles = StyleSheet.create({
   questionText: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary, lineHeight: 30, letterSpacing: -0.2 },
   questionContext: { fontSize: FontSize.xs, color: Colors.textMuted, fontStyle: 'italic' },
   options: { gap: Spacing.sm },
-  optionBtn: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, borderRadius: BorderRadius.lg, padding: Spacing.md, paddingVertical: 14, borderWidth: 1.5 },
-  optionLabelWrap: { width: 30, height: 30, borderRadius: 8, backgroundColor: Colors.backgroundInput, alignItems: 'center', justifyContent: 'center' },
+  optionBtn: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, borderRadius: BorderRadius.lg, padding: Spacing.md, paddingVertical: 14, borderWidth: 1.5, backgroundColor: 'rgba(255,255,255,0.04)' },
+  optionLabelWrap: { width: 30, height: 30, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center' },
   optionLabelText: { color: Colors.textSecondary, fontSize: FontSize.sm, fontWeight: FontWeight.bold },
   optionText: { flex: 1, fontSize: FontSize.md, color: Colors.textPrimary, lineHeight: 22 },
   explanationCard: { marginTop: Spacing.sm },
@@ -671,14 +677,14 @@ const styles = StyleSheet.create({
 
   /* Phrase cards */
   phraseCard: {
-    backgroundColor: Colors.backgroundCard,
+    backgroundColor: 'rgba(255,255,255,0.05)',
     borderRadius: BorderRadius.lg,
     padding: Spacing.md,
     gap: Spacing.xs,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: 'rgba(255,255,255,0.09)',
     borderLeftWidth: 3,
-    borderLeftColor: Colors.primary + '60',
+    borderLeftColor: Colors.primary + '70',
   },
   phraseCardMastered: { opacity: 0.55, borderLeftColor: Colors.success },
   phraseHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
