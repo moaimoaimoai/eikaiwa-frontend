@@ -20,6 +20,7 @@
         "NSMicrophoneUsageDescription": "英会話練習のために音声入力が必要です",
         "NSSpeechRecognitionUsageDescription": "音声を文字に変換するために使用します",
         "NSCameraUsageDescription": "プロフィール画像の設定に使用します",
+        "NSPhotoLibraryUsageDescription": "プロフィール画像の選択に使用します",
         "UIBackgroundModes": [
           "audio",
           "fetch"
