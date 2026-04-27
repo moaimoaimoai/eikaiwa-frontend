@@ -16,7 +16,7 @@ export const Card: React.FC<CardProps> = ({
     default: { backgroundColor: Colors.backgroundCard },
     elevated: { backgroundColor: Colors.backgroundCard, ...Shadow.md },
     outlined: { backgroundColor: 'transparent', borderWidth: 1, borderColor: Colors.border },
-    glass: { backgroundColor: 'rgba(255,255,255,0.05)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+    glass: { backgroundColor: 'rgba(10,8,28,0.68)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)' },
   };
 
   return (

@@ -579,8 +579,8 @@ const styles = StyleSheet.create({
   /* Header — glassmorphism */
   header: {
     paddingHorizontal: Spacing.md, paddingTop: Spacing.md, paddingBottom: Spacing.lg, gap: Spacing.md,
-    backgroundColor: 'rgba(255,255,255,0.13)',
-    borderBottomWidth: 1, borderBottomColor: 'rgba(245,158,11,0.32)',
+    backgroundColor: 'rgba(10,6,20,0.78)',
+    borderBottomWidth: 1, borderBottomColor: 'rgba(245,158,11,0.35)',
   },
   headerTop: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   headerIconWrap: {

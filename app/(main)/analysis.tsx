@@ -81,9 +81,9 @@ export default function AnalysisScreen() {
       featureDescription="週ごとの学習進捗・ミスの傾向・AIコーチからのアドバイスで弱点を可視化。継続的な改善をサポートします。"
     >
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-      <AppBackground variant="cool" />
+      <AppBackground variant="cool" withPhoto />
       {/* ── グラデーションヘッダー ── */}
-      <LinearGradient colors={['rgba(14,165,233,0.45)', 'rgba(99,102,241,0.32)']} style={styles.header} start={{x:0,y:0}} end={{x:1,y:1}}>
+      <LinearGradient colors={['rgba(5,60,100,0.82)', 'rgba(30,27,120,0.78)']} style={styles.header} start={{x:0,y:0}} end={{x:1,y:1}}>
         <View style={styles.headerTop}>
           <View style={styles.headerIconWrap}>
             <Ionicons name="analytics" size={22} color="#fff" />

@@ -18,8 +18,8 @@ export const Colors = {
   // Backgrounds - Deep dark with purple tint
   background: '#07071A',         // Near-black purple
   backgroundSecondary: '#0D0D26',
-  backgroundCard: 'rgba(255,255,255,0.05)',   // Glassmorphism base
-  backgroundInput: 'rgba(255,255,255,0.08)',
+  backgroundCard: 'rgba(10,8,28,0.68)',        // Dark glass (写真背景対応)
+  backgroundInput: 'rgba(10,8,28,0.75)',
 
   // Text
   textPrimary: '#F0EEFF',        // Slightly purple-tinted white
@@ -37,11 +37,11 @@ export const Colors = {
   gradientEnd: '#7C3AED',
   gradientAccent: ['#5B21B6', '#7C3AED'] as const,
 
-  // Glassmorphism helpers
-  glass: 'rgba(255,255,255,0.05)',
-  glassBorder: 'rgba(255,255,255,0.10)',
-  glassBorderStrong: 'rgba(255,255,255,0.18)',
-  glassHighlight: 'rgba(255,255,255,0.07)',
+  // Glassmorphism helpers (写真背景対応: ダークガラス)
+  glass: 'rgba(10,8,28,0.68)',
+  glassBorder: 'rgba(255,255,255,0.16)',
+  glassBorderStrong: 'rgba(255,255,255,0.26)',
+  glassHighlight: 'rgba(255,255,255,0.10)',
 
   // Mistake types
   grammar: '#F43F5E',

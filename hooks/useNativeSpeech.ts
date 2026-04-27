@@ -10,22 +10,19 @@ try {
   ExpoSpeechRecognitionModule = mod.ExpoSpeechRecognitionModule;
   useSpeechRecognitionEvent = mod.useSpeechRecognitionEvent;
 } catch {
-  // ネイティブモジュール未リビルド時は何もしない（フォールバックで graceful degrade）
+  // ネイティブモジュール未リビルド時は graceful degrade
 }
 
 export type NativeSpeechStatus = 'idle' | 'preparing' | 'listening' | 'recognized' | 'error';
 
 interface UseNativeSpeechOptions {
   lang?: string;
-  /** 認識中のテキストを随時更新するか（true=リアルタイム表示） */
   interimResults?: boolean;
-  /** 最終的な認識結果が確定したときのコールバック */
   onResult?: (text: string) => void;
-  /** エラー発生時のコールバック */
   onError?: (error: string) => void;
 }
 
-interface UseNativeSpeechReturn {
+export interface UseNativeSpeechReturn {
   status: NativeSpeechStatus;
   transcript: string;
   interimTranscript: string;
@@ -45,20 +42,34 @@ export function useNativeSpeech({
   const [transcript, setTranscript] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
 
-  // コールバックは常に最新のものを参照するよう ref で保持（stale closure 対策）
+  // コールバックは常に最新版を参照（stale closure 対策）
   const onResultRef = useRef(onResult);
   onResultRef.current = onResult;
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
-  // ── 音声認識結果 ──
-  useSpeechRecognitionEvent('result', (event) => {
+  /**
+   * ユーザーが明示的に stop() を呼んだかどうかのフラグ。
+   * 無音自動停止（iOS の silence detection）との区別に使う。
+   *   true  → ユーザーがボタンを押して停止 → onResult を呼ぶ
+   *   false → 無音タイムアウト等による自動停止 → 送信しない
+   */
+  const manualStopRef = useRef(false);
+  /**
+   * isFinal: true で確定したテキストを保持。
+   * end イベント時に参照する（state は非同期なので ref で持つ）。
+   */
+  const finalTranscriptRef = useRef('');
+
+  // ── 認識結果 ──
+  useSpeechRecognitionEvent('result', (event: any) => {
     const best = event.results?.[0]?.transcript ?? '';
     if (event.isFinal) {
+      finalTranscriptRef.current = best;
       setTranscript(best);
       setInterimTranscript('');
-      setStatus('recognized');
-      onResultRef.current?.(best);
+      // continuous: true のため、ここでは onResult を呼ばない
+      // → ユーザーが stop() を押したときに end イベント経由で呼ぶ
     } else {
       setInterimTranscript(best);
     }
@@ -69,25 +80,39 @@ export function useNativeSpeech({
     setStatus('listening');
     setTranscript('');
     setInterimTranscript('');
+    finalTranscriptRef.current = '';
   });
 
-  // ── 認識終了（自動停止・無音タイムアウト等） ──
+  // ── 認識終了 ──
   useSpeechRecognitionEvent('end', () => {
-    setStatus((prev) => (prev === 'listening' ? 'idle' : prev));
+    const text = finalTranscriptRef.current;
+    finalTranscriptRef.current = '';
     setInterimTranscript('');
+
+    if (manualStopRef.current && text.trim()) {
+      // ユーザーが明示的に停止 → 結果を返す
+      manualStopRef.current = false;
+      setStatus('recognized');
+      onResultRef.current?.(text);
+    } else {
+      // 無音自動停止 / 結果なし → 送信せず idle へ
+      manualStopRef.current = false;
+      setStatus('idle');
+    }
   });
 
   // ── エラー ──
-  useSpeechRecognitionEvent('error', (event) => {
+  useSpeechRecognitionEvent('error', (event: any) => {
     const msg = event.error ?? 'unknown error';
-    // no-speech はユーザーが話さなかっただけなので静かに idle へ
+    manualStopRef.current = false;
+    finalTranscriptRef.current = '';
+    setInterimTranscript('');
     if (msg === 'no-speech') {
       setStatus('idle');
     } else {
       setStatus('error');
       onErrorRef.current?.(msg);
     }
-    setInterimTranscript('');
   });
 
   const start = useCallback(async () => {
@@ -96,6 +121,8 @@ export function useNativeSpeech({
       return;
     }
     try {
+      manualStopRef.current = false;
+      finalTranscriptRef.current = '';
       setStatus('preparing');
       setTranscript('');
       setInterimTranscript('');
@@ -110,12 +137,8 @@ export function useNativeSpeech({
       await ExpoSpeechRecognitionModule.start({
         lang,
         interimResults,
+        continuous: true,       // 無音でも自動停止しない
         iosTaskHint: 'unspecified',
-        audioSessionOptions: {
-          category: 'PlayAndRecord',
-          categoryOptions: ['DefaultToSpeaker', 'AllowBluetooth'],
-          mode: 'Measurement',
-        },
       });
     } catch (e: any) {
       setStatus('error');
@@ -124,10 +147,13 @@ export function useNativeSpeech({
   }, [lang, interimResults]);
 
   const stop = useCallback(() => {
+    manualStopRef.current = true;   // ユーザーによる明示的停止としてマーク
     ExpoSpeechRecognitionModule?.stop();
   }, []);
 
   const cancel = useCallback(() => {
+    manualStopRef.current = false;
+    finalTranscriptRef.current = '';
     ExpoSpeechRecognitionModule?.abort();
     setStatus('idle');
     setTranscript('');

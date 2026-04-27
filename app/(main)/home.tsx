@@ -106,7 +106,7 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       {/* ── 全画面背景 ── */}
-      <AppBackground variant="default" />
+      <AppBackground variant="default" withPhoto />
 
       <ScrollView
         style={styles.scroll}
@@ -117,10 +117,9 @@ export default function HomeScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* ══════════════════════════════════
-            ヘッダー — グラスカード
+            ヘッダー — カードなし・ダイレクト
         ══════════════════════════════════ */}
         <Animated.View style={[styles.header, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-
           {/* トップ行: 挨拶 + アバターボタン */}
           <View style={styles.headerTop}>
             <View style={styles.headerLeft}>
@@ -151,13 +150,8 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* ストリークバナー */}
+          {/* ストリーク（カードなし） */}
           <View style={styles.streakCard}>
-            <LinearGradient
-              colors={['rgba(124,58,237,0.18)', 'rgba(91,33,182,0.08)']}
-              style={StyleSheet.absoluteFill}
-              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-            />
             <View style={styles.streakLeft}>
               <View style={styles.streakFlameWrap}>
                 <Ionicons name="flame" size={20} color="#FB923C" />
@@ -457,36 +451,41 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: { paddingBottom: 140 },
 
-  /* ── ヘッダー (グラスカード) ── */
+  /* ── ヘッダー (カードなし・ダイレクト) ── */
   header: {
     marginHorizontal: Spacing.md,
     marginTop: Spacing.md,
-    borderRadius: BorderRadius.xl,
-    borderWidth: 1,
-    borderColor: 'rgba(167,139,250,0.32)',
-    backgroundColor: 'rgba(255,255,255,0.13)',
-    padding: Spacing.lg,
-    gap: Spacing.md,
-    overflow: 'hidden',
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.sm,
+    gap: Spacing.lg,
   },
   headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  headerLeft: { gap: 7 },
+  headerLeft: { gap: 6, flex: 1, paddingRight: 12 },
   greeting: {
-    fontSize: FontSize.sm,
-    color: 'rgba(255,255,255,0.5)',
-    fontWeight: FontWeight.medium,
-    letterSpacing: 0.4,
+    fontSize: FontSize.xs,
+    color: 'rgba(255,255,255,0.52)',
+    fontWeight: FontWeight.bold,
+    letterSpacing: 2.5,
+    textTransform: 'uppercase',
+    textShadowColor: 'rgba(0,0,0,0.7)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
   userName: {
-    fontSize: 30,
+    fontSize: 38,
     fontWeight: FontWeight.extrabold,
     color: '#fff',
-    letterSpacing: -0.9,
+    letterSpacing: -1.4,
+    lineHeight: 44,
+    textShadowColor: 'rgba(0,0,0,0.45)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 10,
   },
   userNameSuffix: {
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: FontWeight.semibold,
-    color: 'rgba(255,255,255,0.75)',
+    color: 'rgba(255,255,255,0.68)',
   },
   levelPill: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
@@ -504,19 +503,24 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
   avatarButton: {
-    width: 46, height: 46, borderRadius: 23,
+    width: 50, height: 50, borderRadius: 25,
     overflow: 'hidden',
-    borderWidth: 1.5, borderColor: 'rgba(167,139,250,0.4)',
+    borderWidth: 2, borderColor: 'rgba(167,139,250,0.55)',
+    shadowColor: '#7C3AED',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.45,
+    shadowRadius: 10,
+    elevation: 6,
   },
   avatarGradient: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
-  /* ストリークカード */
+  /* ストリーク (カードなし：仕切り線のみ) */
   streakCard: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    borderRadius: BorderRadius.lg,
-    paddingHorizontal: Spacing.md, paddingVertical: 13,
-    borderWidth: 1, borderColor: 'rgba(124,58,237,0.25)',
-    overflow: 'hidden',
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.09)',
   },
   streakLeft: { flexDirection: 'row', alignItems: 'center', gap: 11 },
   streakFlameWrap: {
@@ -542,7 +546,8 @@ const styles = StyleSheet.create({
     paddingVertical: 18, paddingHorizontal: 8,
     alignItems: 'center', gap: 7,
     overflow: 'hidden',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(10,8,28,0.68)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)',
     position: 'relative',
   },
   statIconWrap: {

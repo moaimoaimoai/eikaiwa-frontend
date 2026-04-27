@@ -156,11 +156,11 @@ const styles = StyleSheet.create({
   },
   centerTabGlow: {
     position: 'absolute',
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    backgroundColor: 'rgba(124, 58, 237, 0.35)',
-    transform: [{ scale: 1.3 }],
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: 'rgba(124, 58, 237, 0.28)',
+    // scale をなくしてボタンに密着させる（タブバー外への染み出しを防ぐ）
   },
   centerTab: {
     width: 58,
@@ -172,11 +172,11 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(167, 139, 250, 0.3)',
   },
   centerTabActive: {
-    borderColor: 'rgba(167, 139, 250, 0.5)',
+    borderColor: 'rgba(167, 139, 250, 0.55)',
     shadowColor: '#7C3AED',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 20,
-    elevation: 12,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.55,
+    shadowRadius: 10,
+    elevation: 8,
   },
 });

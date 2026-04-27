@@ -11,7 +11,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import { conversationService } from '../../services/conversation';
-import { useNativeSpeech } from '../../hooks/useNativeSpeech';
 import { useConversationStore } from '../../store/conversationStore';
 import { useAuthStore } from '../../store/authStore';
 import { useNotificationStore } from '../../store/notificationStore';
@@ -119,12 +118,14 @@ export default function ConversationScreen() {
   const [mode, setMode] = useState<Mode>('setup');
   const [inputText, setInputText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
+  const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [currentCorrection, setCurrentCorrection] = useState<Correction | null>(null);
   const [currentCoaching, setCurrentCoaching] = useState<CoachingTip | null>(null);
   const [summary, setSummaryLocal] = useState<any>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
+  const [scoringBasisOpen, setScoringBasisOpen] = useState(false);
 
   /** ユーザーのターン数（送信回数） */
   const [userTurnCount, setUserTurnCount] = useState(0);
@@ -149,8 +150,11 @@ export default function ConversationScreen() {
   const micPhaseRef = useRef<'idle' | 'preparing' | 'recording'>('idle');
   const [isPreparing, setIsPreparing] = useState(false); // スピナー表示用
 
+  /** 録音開始タイムスタンプ（最短録音時間チェック用） */
+  const recordingStartTimeRef = useRef<number | null>(null);
   /** 録音中の経過秒数（UIカウンター用） */
   const [recordingSec, setRecordingSec] = useState(0);
+  const recordingTickRef = useRef<NodeJS.Timeout | null>(null);
 
   // ── 日本語ヘルプ機能の状態 ──
   const [showJpHelp, setShowJpHelp] = useState(false);
@@ -164,6 +168,7 @@ export default function ConversationScreen() {
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const scrollRef = useRef<ScrollView>(null);
+  const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingAnim = useRef(new Animated.Value(1)).current;
 
   /** 無操作タイムアウト用 */
@@ -334,71 +339,6 @@ export default function ConversationScreen() {
   const isNearLimit = remainingTurns <= WARN_AT_REMAINING && remainingTurns > 0;
   const isAtLimit = remainingTurns <= 0;
 
-  // ─── ネイティブ音声認識 ───
-  // sendMessage は後で定義されるが、ref 経由で常に最新版を参照する
-  const sendMessageRef = useRef<((text?: string) => Promise<void>) | null>(null);
-
-  const nativeSpeech = useNativeSpeech({
-    lang: 'en-US',
-    interimResults: true,
-    onResult: async (text) => {
-      if (!text.trim()) {
-        micPhaseRef.current = 'idle';
-        setIsRecording(false);
-        setTranscribeStatus('idle');
-        return;
-      }
-      micPhaseRef.current = 'idle';
-      setIsRecording(false);
-      setTranscribeStatus('recognized');
-      setRecognizedText(text);
-      try {
-        await sendMessageRef.current?.(text);
-      } finally {
-        setTranscribeStatus('idle');
-        setRecognizedText('');
-      }
-    },
-    onError: (error) => {
-      micPhaseRef.current = 'idle';
-      setIsRecording(false);
-      setIsPreparing(false);
-      setTranscribeStatus('idle');
-      if (error === 'module_not_available') {
-        Alert.alert(
-          'リビルドが必要です',
-          'ネイティブ音声認識を使うには、アプリの再ビルドが必要です。\n\n' +
-          '  cd frontend\n  npm install\n  npx expo run:ios\n\n' +
-          'テキスト入力でも会話できます。'
-        );
-      } else if (error !== 'permission_denied') {
-        Alert.alert('エラー', '音声認識に失敗しました。テキスト入力でも会話できます。');
-      }
-    },
-  });
-
-  // ネイティブ音声認識: listening 開始時に UI を recording フェーズへ移行
-  useEffect(() => {
-    if (nativeSpeech.status === 'listening') {
-      micPhaseRef.current = 'recording';
-      setIsPreparing(false);
-      setIsRecording(true);
-      setTranscribeStatus('listening');
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    }
-  }, [nativeSpeech.status]);
-
-  // isRecording 中の秒数カウンター
-  useEffect(() => {
-    if (isRecording) {
-      setRecordingSec(0);
-      const interval = setInterval(() => setRecordingSec(s => s + 1), 1000);
-      return () => clearInterval(interval);
-    } else {
-      setRecordingSec(0);
-    }
-  }, [isRecording]);
-
   // ─── セッション開始 ───
   const startSession = async () => {
     resetSession();
@@ -523,9 +463,6 @@ export default function ConversationScreen() {
     }
   };
 
-  // sendMessage は render ごとに再生成されるため、ref を常に最新に保つ
-  sendMessageRef.current = sendMessage;
-
   const playAIResponse = async (text: string) => {
     try {
       setIsSpeaking(true);
@@ -545,7 +482,6 @@ export default function ConversationScreen() {
     try {
       if (sound) await sound.unloadAsync();
       setIsSpeaking(true);
-      // 消音モード(サイレントモード)でも再生できるよう設定
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
         playsInSilentModeIOS: true,
@@ -562,12 +498,11 @@ export default function ConversationScreen() {
     } catch { setIsSpeaking(false); }
   };
 
-  // ─── 音声認識開始 ───
+  // ─── 録音開始 ───
   const startRecording = async () => {
-    if (isLoading || isSpeaking || isAtLimit) return;
-    if (micPhaseRef.current !== 'idle') return;
+    if (isLoading || isSpeaking || isAtLimit) { return; }
+    if (micPhaseRef.current !== 'idle') { return; }
 
-    // 既に拒否済みの場合は設定アプリへ誘導
     if (micPermission === 'denied') {
       Alert.alert(
         'マイクの権限が必要です',
@@ -580,39 +515,167 @@ export default function ConversationScreen() {
       return;
     }
 
-    // preparing フェーズへ（スピナー表示）
+    // ── Phase 1: preparing ──
     micPhaseRef.current = 'preparing';
     setIsPreparing(true);
-    setTranscribeStatus('listening');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-    // nativeSpeech.start() 内部で権限リクエスト → SFSpeechRecognizer 起動
-    // 'start' イベント発火時に useEffect で recording フェーズへ移行する
-    await nativeSpeech.start();
+    const prepStart = Date.now();
+    const MIN_PREP_MS = 300;
+
+    try {
+      const { granted, canAskAgain } = await Audio.requestPermissionsAsync();
+      if (micPhaseRef.current !== 'preparing') { return; }
+
+      if (!granted) {
+        micPhaseRef.current = 'idle';
+        setIsPreparing(false);
+        setMicPermission('denied');
+        if (!canAskAgain) {
+          Alert.alert(
+            'マイクの権限が必要です',
+            '設定アプリでマイクの使用を許可してください。テキスト入力でも会話できます。',
+            [
+              { text: 'キャンセル', style: 'cancel' },
+              { text: '設定を開く', onPress: () => Linking.openSettings() },
+            ]
+          );
+        } else {
+          Alert.alert('権限が必要です', 'マイクの使用を許可してください。テキスト入力でも会話できます。');
+        }
+        return;
+      }
+      setMicPermission('granted');
+
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      if (micPhaseRef.current !== 'preparing') { return; }
+
+      const elapsed = Date.now() - prepStart;
+      if (elapsed < MIN_PREP_MS) {
+        await new Promise<void>(resolve => setTimeout(resolve, MIN_PREP_MS - elapsed));
+      }
+      if (micPhaseRef.current !== 'preparing') { return; }
+
+      const { recording: rec } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      if (micPhaseRef.current !== 'preparing') {
+        rec.stopAndUnloadAsync().catch(() => {});
+        recordingRef.current = null;
+        return;
+      }
+
+      // ── Phase 2: recording ──
+      recordingRef.current = rec;
+      setRecording(rec);
+      micPhaseRef.current = 'recording';
+      setIsPreparing(false);
+      setIsRecording(true);
+      setTranscribeStatus('listening');
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      recordingStartTimeRef.current = Date.now();
+      setRecordingSec(0);
+      recordingTickRef.current = setInterval(() => {
+        setRecordingSec(s => s + 1);
+      }, 1000);
+
+    } catch (e: any) {
+      micPhaseRef.current = 'idle';
+      setIsPreparing(false);
+      setIsRecording(false);
+      setTranscribeStatus('idle');
+      const isSimulator = e?.message?.includes('simulator') || e?.message?.includes('Simulator');
+      if (isSimulator) {
+        Alert.alert(
+          'シミュレーターではマイクを使用できません',
+          'テキスト入力で会話してください。実機ではマイクが利用できます。'
+        );
+      } else {
+        Alert.alert('録音を開始できませんでした', 'テキスト入力でも会話できます。');
+      }
+    }
+  };
+
+  // ─── 録音停止の実処理 ───
+  const stopRecordingWithRef = async (rec: Audio.Recording) => {
+    if (recordingTickRef.current) { clearInterval(recordingTickRef.current); recordingTickRef.current = null; }
+    recordingStartTimeRef.current = null;
+    setRecordingSec(0);
+    micPhaseRef.current = 'idle';
+    setIsRecording(false);
+    setIsPreparing(false);
+    setTranscribeStatus('processing');
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    try {
+      await rec.stopAndUnloadAsync();
+      const uri = rec.getURI();
+      recordingRef.current = null;
+      setRecording(null);
+      if (uri) {
+        const transcribed = await conversationService.transcribeAudio(uri);
+        if (transcribed) {
+          setRecognizedText(transcribed);
+          setTranscribeStatus('recognized');
+          await sendMessage(transcribed);
+        }
+      }
+    } catch (e: any) {
+      Alert.alert('エラー', '音声認識に失敗しました');
+    } finally {
+      setTranscribeStatus('idle');
+      setRecognizedText('');
+    }
+  };
+
+  // ─── 録音停止 ───
+  const stopRecording = async () => {
+    const phase = micPhaseRef.current;
+    if (phase === 'preparing') {
+      micPhaseRef.current = 'idle';
+      setIsPreparing(false);
+      return;
+    }
+    if (phase === 'recording') {
+      const currentRecording = recordingRef.current;
+      if (currentRecording) {
+        await stopRecordingWithRef(currentRecording);
+      } else {
+        micPhaseRef.current = 'idle';
+        setIsRecording(false);
+        setTranscribeStatus('idle');
+      }
+    }
   };
 
   /**
-   * ─── トグル録音（タップ1回で開始、もう1回で停止・送信）───
-   *
-   *   1回目タップ → preparing → listening（ネイティブ認識開始）
-   *   2回目タップ → 認識停止 → onResult コールバックでテキスト取得 → 送信
+   * ─── トグル録音（タップ式）───
+   *   1回目タップ → preparing → recording
+   *   2回目タップ → 停止 → Whisper 文字起こし → 送信
    */
+  const MIN_RECORDING_MS = 1500;
+
   const handleMicPress = async () => {
     const phase = micPhaseRef.current;
 
     if (phase === 'idle') {
       await startRecording();
     } else if (phase === 'preparing') {
-      // 準備中にキャンセル
-      nativeSpeech.cancel();
       micPhaseRef.current = 'idle';
       setIsPreparing(false);
-      setTranscribeStatus('idle');
     } else if (phase === 'recording') {
-      // 認識停止 → onResult が呼ばれてテキスト確定・送信
-      setTranscribeStatus('processing');
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      nativeSpeech.stop();
+      const elapsed = recordingStartTimeRef.current ? Date.now() - recordingStartTimeRef.current : MIN_RECORDING_MS;
+      if (elapsed < MIN_RECORDING_MS) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        return;
+      }
+      const currentRecording = recordingRef.current;
+      if (currentRecording) {
+        await stopRecordingWithRef(currentRecording);
+      } else {
+        micPhaseRef.current = 'idle';
+        setIsRecording(false);
+        setTranscribeStatus('idle');
+      }
     }
   };
 
@@ -820,7 +883,7 @@ export default function ConversationScreen() {
   if (mode === 'setup') {
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-        <AppBackground variant="default" />
+        <AppBackground variant="default" withPhoto />
         <ScrollView contentContainerStyle={styles.setupContent} showsVerticalScrollIndicator={false}>
           {/* ヘッダーエリア */}
           <View style={styles.setupHeader}>
@@ -939,15 +1002,18 @@ export default function ConversationScreen() {
             </Text>
           </View>
 
+        </ScrollView>
+
+        {/* 固定フッターボタン（summaryFloatingActionsと同パターン） */}
+        <View style={styles.startBtnBar}>
           <Button
             title="会話を始める"
             onPress={startSession}
             loading={isLoading}
             fullWidth
             size="lg"
-            style={styles.startBtn}
           />
-        </ScrollView>
+        </View>
       </SafeAreaView>
     );
   }
@@ -959,19 +1025,21 @@ export default function ConversationScreen() {
         <AppBackground variant="warm" />
         <View style={styles.summaryContainer}>
           <ScrollView contentContainerStyle={styles.summaryContent} showsVerticalScrollIndicator={false}>
-            {/* ヒーローエリア */}
+            {/* ヒーローエリア - コンパクト */}
             <View style={styles.summaryHero}>
-              <View style={styles.summaryTrophyOuter}>
-                <View style={styles.summaryTrophyMid}>
-                  <View style={styles.summaryTrophyWrap}>
-                    <Ionicons name="trophy" size={48} color={Colors.gold} />
-                  </View>
+              <View style={styles.summaryTrophyWrap}>
+                <Ionicons name="trophy" size={30} color={Colors.gold} />
+              </View>
+              <View style={styles.summaryHeroText}>
+                <Text style={styles.summaryTitle}>会話完了！</Text>
+                <View style={styles.summaryTurnsBadge}>
+                  <Ionicons name="chatbubbles" size={12} color={Colors.primaryLight} />
+                  <Text style={styles.summaryTurns}>{userTurnCount}回のやり取りを達成</Text>
                 </View>
               </View>
-              <Text style={styles.summaryTitle}>会話完了！</Text>
-              <Text style={styles.summaryTurns}>{userTurnCount}回のやり取りを達成</Text>
             </View>
 
+            {/* スコア - 横1列コンパクト */}
             <View style={styles.scoreGrid}>
               {[
                 { label: '総合', score: summary.overall_score, color: Colors.primary, icon: 'star' as const },
@@ -981,11 +1049,11 @@ export default function ConversationScreen() {
               ].map((s, i) => (
                 <View key={i} style={styles.scoreCard}>
                   <LinearGradient
-                    colors={[s.color + '18', s.color + '06']}
+                    colors={[s.color + '20', s.color + '08']}
                     style={StyleSheet.absoluteFill}
                     start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
                   />
-                  <Ionicons name={s.icon} size={22} color={s.color} />
+                  <Ionicons name={s.icon} size={16} color={s.color} />
                   <Text style={[styles.scoreValue, { color: s.color }]}>{s.score}</Text>
                   <Text style={styles.scoreLabel}>{s.label}</Text>
                   <View style={[styles.scoreBottomBar, { backgroundColor: s.color }]} />
@@ -993,32 +1061,44 @@ export default function ConversationScreen() {
               ))}
             </View>
 
-            {/* ── 採点根拠カード ── */}
+            {/* ── 採点根拠カード（折りたたみ式） ── */}
             {summary.score_reasoning && (
               <View style={styles.scoringBasisCard}>
-                <View style={styles.scoringBasisHeader}>
-                  <Ionicons name="analytics" size={15} color={Colors.info} />
+                <TouchableOpacity
+                  style={styles.scoringBasisHeader}
+                  onPress={() => setScoringBasisOpen(v => !v)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="analytics" size={14} color={Colors.info} />
                   <Text style={styles.scoringBasisTitle}>採点の根拠</Text>
                   <View style={styles.scoringBasisBadge}>
                     <Text style={styles.scoringBasisBadgeText}>
-                      ミス {summary.score_reasoning.errors_found}件 /{' '}
-                      {userTurnCount}ターン（{summary.score_reasoning.error_rate_per_turn.toFixed(1)}件/回）
+                      ミス {summary.score_reasoning.errors_found}件 / {userTurnCount}回
                     </Text>
                   </View>
-                </View>
-                <View style={styles.scoringBasisRow}>
-                  <Text style={styles.scoringBasisLabel}>✅ 正確さ</Text>
-                  <Text style={styles.scoringBasisText}>{summary.score_reasoning.accuracy_basis}</Text>
-                </View>
-                <View style={styles.scoringBasisRow}>
-                  <Text style={styles.scoringBasisLabel}>📚 語彙</Text>
-                  <Text style={styles.scoringBasisText}>{summary.score_reasoning.vocabulary_basis}</Text>
-                </View>
-                <View style={styles.scoringBasisRow}>
-                  <Text style={styles.scoringBasisLabel}>💬 流暢さ</Text>
-                  <Text style={styles.scoringBasisText}>{summary.score_reasoning.fluency_basis}</Text>
-                </View>
-                <Text style={styles.scoringBasisNote}>{summary.score_reasoning.pronunciation_note}</Text>
+                  <Ionicons
+                    name={scoringBasisOpen ? 'chevron-up' : 'chevron-down'}
+                    size={14} color={Colors.info}
+                    style={{ marginLeft: 'auto' as any }}
+                  />
+                </TouchableOpacity>
+                {scoringBasisOpen && (
+                  <>
+                    <View style={styles.scoringBasisRow}>
+                      <Text style={styles.scoringBasisLabel}>✅ 正確さ</Text>
+                      <Text style={styles.scoringBasisText}>{summary.score_reasoning.accuracy_basis}</Text>
+                    </View>
+                    <View style={styles.scoringBasisRow}>
+                      <Text style={styles.scoringBasisLabel}>📚 語彙</Text>
+                      <Text style={styles.scoringBasisText}>{summary.score_reasoning.vocabulary_basis}</Text>
+                    </View>
+                    <View style={styles.scoringBasisRow}>
+                      <Text style={styles.scoringBasisLabel}>💬 流暢さ</Text>
+                      <Text style={styles.scoringBasisText}>{summary.score_reasoning.fluency_basis}</Text>
+                    </View>
+                    <Text style={styles.scoringBasisNote}>{summary.score_reasoning.pronunciation_note}</Text>
+                  </>
+                )}
               </View>
             )}
 
@@ -1391,12 +1471,8 @@ export default function ConversationScreen() {
               {transcribeStatus === 'listening' ? (
                 <>
                   <Animated.View style={[styles.recDot, { transform: [{ scale: recordingAnim }] }]} />
-                  {nativeSpeech.interimTranscript ? (
-                    <Text style={styles.transcribeText} numberOfLines={2}>{nativeSpeech.interimTranscript}</Text>
-                  ) : (
-                    <Text style={styles.transcribeText}>話してください...</Text>
-                  )}
-                  <Text style={styles.transcribeHint}>ボタンを押すと送信します</Text>
+                  <Text style={styles.transcribeText}>話してください...</Text>
+                  <Text style={styles.transcribeHint}>ボタンを離すと認識します</Text>
                 </>
               ) : transcribeStatus === 'recognized' ? (
                 <>
@@ -1578,7 +1654,7 @@ const styles = StyleSheet.create({
   },
 
   /* Setup */
-  setupContent: { padding: Spacing.lg, gap: Spacing.xl, paddingBottom: 120 },
+  setupContent: { padding: Spacing.lg, gap: Spacing.xl, paddingBottom: Spacing.lg },
   setupHeader: {
     alignItems: 'center', gap: 8,
     paddingVertical: Spacing.lg,
@@ -1605,7 +1681,7 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center',
   },
   section: { gap: Spacing.sm },
-  sectionLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textSecondary, textTransform: 'uppercase' as const, letterSpacing: 0.8 },
+  sectionLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: 'rgba(220,216,255,0.85)', textTransform: 'uppercase' as const, letterSpacing: 0.8 },
 
   /* 今日のトピックバナー（セットアップ画面） */
   dailyTopicBanner: {
@@ -1672,17 +1748,17 @@ const styles = StyleSheet.create({
   },
   avatarEmoji: { fontSize: 36 },
   avatarName: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  avatarAccent: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.medium },
-  avatarDesc: { fontSize: 10, color: Colors.textMuted, textAlign: 'center', lineHeight: 14 },
+  avatarAccent: { fontSize: FontSize.xs, color: 'rgba(200,196,235,0.75)', fontWeight: FontWeight.semibold },
+  avatarDesc: { fontSize: 11, color: 'rgba(200,196,235,0.65)', textAlign: 'center', lineHeight: 15 },
   topicGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   topicChip: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingVertical: 10, paddingHorizontal: Spacing.md,
-    backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: BorderRadius.full,
-    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.10)',
+    backgroundColor: 'rgba(255,255,255,0.07)', borderRadius: BorderRadius.full,
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.14)',
   },
   topicChipIcon: { fontSize: 17 },
-  topicChipLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.semibold },
+  topicChipLabel: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
   turnInfoCard: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
     backgroundColor: Colors.info + '15',
@@ -1690,26 +1766,38 @@ const styles = StyleSheet.create({
     padding: Spacing.md,
     borderWidth: 1, borderColor: Colors.info + '30',
   },
-  turnInfoText: { fontSize: FontSize.sm, color: Colors.textSecondary, flex: 1 },
+  turnInfoText: { fontSize: FontSize.sm, color: 'rgba(200,196,235,0.85)', flex: 1 },
   startBtn: { marginTop: Spacing.sm },
-
+  startBtnBar: {
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.md,
+    backgroundColor: Colors.backgroundSecondary,
+    borderTopWidth: 0.5,
+    borderTopColor: Colors.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 8,
+  },
   /* Chat header */
   chatHeader: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    paddingHorizontal: Spacing.md, paddingVertical: 12,
-    backgroundColor: Colors.backgroundSecondary,
-    borderBottomWidth: 0.5, borderBottomColor: Colors.border,
+    paddingHorizontal: Spacing.md, paddingVertical: 10,
+    backgroundColor: 'rgba(13,13,38,0.96)',
+    borderBottomWidth: 1, borderBottomColor: 'rgba(124,58,237,0.25)',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 6,
   },
   chatHeaderInfo: { flex: 1 },
   chatHeaderName: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary, letterSpacing: -0.2 },
-  chatHeaderStatus: { fontSize: FontSize.xs, color: Colors.success, fontWeight: FontWeight.medium },
+  chatHeaderStatus: { fontSize: FontSize.xs, color: Colors.success, fontWeight: FontWeight.semibold },
   chatHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  timer: { fontSize: FontSize.sm, color: Colors.textMuted, fontVariant: ['tabular-nums'] as any },
+  timer: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.45)', fontVariant: ['tabular-nums'] as any, fontWeight: FontWeight.medium },
 
   /* ターンカウンター */
   turnCounter: {
@@ -1723,8 +1811,13 @@ const styles = StyleSheet.create({
   turnCounterDone: { backgroundColor: Colors.error + '20', borderColor: Colors.error + '60' },
   turnCounterText: { fontSize: 11, color: Colors.textMuted, fontWeight: FontWeight.semibold },
 
-  endButton: { backgroundColor: Colors.error + '20', borderRadius: BorderRadius.full, paddingHorizontal: Spacing.md, paddingVertical: 6 },
-  endButtonText: { color: Colors.error, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  endButton: {
+    backgroundColor: 'rgba(244,63,94,0.18)',
+    borderRadius: BorderRadius.full,
+    paddingHorizontal: 14, paddingVertical: 6,
+    borderWidth: 1, borderColor: 'rgba(244,63,94,0.35)',
+  },
+  endButtonText: { color: '#F87171', fontSize: FontSize.sm, fontWeight: FontWeight.bold },
 
   /* 警告バナー */
   warnBanner: {
@@ -1745,26 +1838,35 @@ const styles = StyleSheet.create({
 
   messagesContainer: { flex: 1, position: 'relative' },
   messages: { flex: 1 },
-  messagesContent: { paddingVertical: Spacing.md, paddingBottom: Spacing.xl },
-  typingIndicator: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, paddingHorizontal: Spacing.md, marginVertical: 6 },
-  avatarSmall: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.backgroundCard, alignItems: 'center', justifyContent: 'center' },
-  typingBubble: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.backgroundCard, borderRadius: BorderRadius.lg, padding: Spacing.md },
-  typingText: { color: Colors.textMuted, fontSize: FontSize.sm },
-
-  suggestions: { maxHeight: 46, marginBottom: 4 },
-  suggestionsContent: { paddingHorizontal: Spacing.md, gap: 8, alignItems: 'center' },
-  suggestionChip: {
-    backgroundColor: 'rgba(79,70,229,0.12)', borderRadius: BorderRadius.full,
-    paddingVertical: 8, paddingHorizontal: Spacing.md,
-    borderWidth: 1, borderColor: Colors.primary + '35',
+  messagesContent: { paddingTop: Spacing.sm, paddingBottom: Spacing.xl },
+  typingIndicator: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, paddingHorizontal: Spacing.md, marginVertical: 4 },
+  avatarSmall: { width: 30, height: 30, borderRadius: 15, backgroundColor: 'rgba(255,255,255,0.09)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.13)', alignItems: 'center', justifyContent: 'center' },
+  typingBubble: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: 'rgba(255,255,255,0.09)',
+    borderRadius: 18, borderBottomLeftRadius: 5,
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.13)',
   },
-  suggestionText: { color: Colors.primaryLight, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
+  typingText: { color: 'rgba(255,255,255,0.55)', fontSize: FontSize.sm },
+
+  suggestions: { maxHeight: 44, marginBottom: 2 },
+  suggestionsContent: { paddingHorizontal: Spacing.md, gap: 7, alignItems: 'center' },
+  suggestionChip: {
+    backgroundColor: 'rgba(124,58,237,0.20)', borderRadius: BorderRadius.full,
+    paddingVertical: 7, paddingHorizontal: 14,
+    borderWidth: 1, borderColor: 'rgba(167,139,250,0.40)',
+  },
+  suggestionText: { color: '#C4B5FD', fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
 
   /* 入力エリア */
   inputArea: {
-    padding: Spacing.md, gap: Spacing.sm,
-    backgroundColor: Colors.backgroundSecondary,
-    borderTopWidth: 1, borderTopColor: Colors.border,
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.sm,
+    gap: Spacing.sm,
+    backgroundColor: 'rgba(13,13,38,0.97)',
+    borderTopWidth: 1, borderTopColor: 'rgba(124,58,237,0.22)',
   },
 
   /* 音声認識ステータス */
@@ -1782,17 +1884,26 @@ const styles = StyleSheet.create({
   transcribeStatusRecognized: { borderColor: Colors.success + '60', backgroundColor: Colors.success + '12' },
   transcribeHint: { fontSize: FontSize.xs, color: Colors.textMuted },
 
-  inputRow: { flexDirection: 'row', gap: Spacing.sm, alignItems: 'flex-end' },
+  inputRow: { flexDirection: 'row', gap: 10, alignItems: 'flex-end' },
   textInput: {
-    flex: 1, backgroundColor: Colors.backgroundInput,
-    borderRadius: BorderRadius.lg, paddingHorizontal: Spacing.md,
+    flex: 1, backgroundColor: 'rgba(255,255,255,0.07)',
+    borderRadius: 22, paddingHorizontal: 16,
     paddingVertical: 10, color: Colors.textPrimary,
     fontSize: FontSize.md, maxHeight: 100,
-    borderWidth: 1, borderColor: Colors.border,
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.12)',
   },
-  textInputActive: { borderColor: Colors.primary + '80' },
-  sendButton: { width: 48, height: 48, borderRadius: 24, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
-  sendButtonDisabled: { backgroundColor: Colors.textMuted },
+  textInputActive: { borderColor: 'rgba(167,139,250,0.6)', backgroundColor: 'rgba(124,58,237,0.10)' },
+  sendButton: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: Colors.primary,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  sendButtonDisabled: { backgroundColor: 'rgba(255,255,255,0.12)', shadowOpacity: 0 },
 
   /* AI発言中の波形ボタン */
   speakingContainer: { alignItems: 'center', gap: 6 },
@@ -2032,7 +2143,7 @@ const styles = StyleSheet.create({
   },
 
   /* Push-to-Talk ボタン */
-  voiceButtonContainer: { alignItems: 'center', gap: 7 },
+  voiceButtonContainer: { alignItems: 'center', gap: 7, marginBottom: 8 },
   voiceButtonGlow: {
     position: 'absolute', top: -12,
     width: 90, height: 90, borderRadius: 45,
@@ -2042,70 +2153,72 @@ const styles = StyleSheet.create({
   voiceButtonLabel: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.semibold },
 
   /* Summary */
-  summaryContent: { padding: Spacing.lg, gap: Spacing.lg, paddingBottom: 120 },
-  summaryHero: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.lg },
-  summaryTrophyOuter: {
-    width: 150, height: 150, borderRadius: 75,
-    backgroundColor: 'rgba(245,158,11,0.08)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  summaryTrophyMid: {
-    width: 118, height: 118, borderRadius: 59,
-    backgroundColor: 'rgba(245,158,11,0.13)',
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: 'rgba(245,158,11,0.2)',
+  summaryContent: { padding: Spacing.md, gap: Spacing.md, paddingBottom: 120 },
+
+  /* ヒーロー - 横並びコンパクト */
+  summaryHero: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    paddingVertical: Spacing.md, paddingHorizontal: Spacing.sm,
   },
   summaryTrophyWrap: {
-    width: 90, height: 90, borderRadius: 45,
-    backgroundColor: 'rgba(245,158,11,0.2)',
+    width: 56, height: 56, borderRadius: 28,
+    backgroundColor: 'rgba(245,158,11,0.18)',
     alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1.5, borderColor: 'rgba(245,158,11,0.35)',
+    borderWidth: 1.5, borderColor: 'rgba(245,158,11,0.4)',
+    flexShrink: 0,
   },
-  summaryTitle: { fontSize: 30, fontWeight: FontWeight.extrabold, color: Colors.textPrimary, letterSpacing: -0.8 },
-  summaryTurns: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.medium },
-  scoreGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  summaryHeroText: { flex: 1, gap: 5 },
+  summaryTitle: { fontSize: 24, fontWeight: FontWeight.extrabold, color: Colors.textPrimary, letterSpacing: -0.6 },
+  summaryTurnsBadge: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  summaryTurns: { fontSize: FontSize.xs, color: Colors.primaryLight, fontWeight: FontWeight.semibold },
+
+  /* スコアグリッド - 横1列 */
+  scoreGrid: { flexDirection: 'row', gap: Spacing.xs },
   scoreCard: {
-    flex: 1, minWidth: '45%',
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderRadius: BorderRadius.xl,
-    padding: Spacing.lg,
-    alignItems: 'center', gap: 6,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
+    flex: 1,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: BorderRadius.lg,
+    paddingVertical: 14, paddingHorizontal: 6,
+    alignItems: 'center', gap: 4,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)',
     overflow: 'hidden',
     position: 'relative',
   },
   scoreBottomBar: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
-    height: 2.5, opacity: 0.7,
+    height: 2.5, opacity: 0.8,
   },
-  scoreValue: { fontSize: 38, fontWeight: FontWeight.extrabold, letterSpacing: -1 },
-  scoreLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+  scoreValue: { fontSize: 26, fontWeight: FontWeight.extrabold, letterSpacing: -0.8 },
+  scoreLabel: { fontSize: 10, color: Colors.textSecondary, fontWeight: FontWeight.semibold },
+
   summarySection: {
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderRadius: BorderRadius.xl,
-    padding: Spacing.lg, gap: Spacing.sm,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.09)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: BorderRadius.lg,
+    paddingHorizontal: Spacing.md, paddingVertical: Spacing.md,
+    gap: Spacing.sm,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
   },
   summarySectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  summarySectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  summaryText: { fontSize: FontSize.md, color: Colors.textSecondary, lineHeight: 23 },
-  bulletRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 2 },
-  bulletItem: { flex: 1, fontSize: FontSize.md, color: Colors.textSecondary, lineHeight: 22 },
+  summarySectionTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  summaryText: { fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 21 },
+  bulletRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 1 },
+  bulletItem: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
   /* 便利フレーズカード（サマリー） */
   summaryPhraseCard: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: Spacing.sm,
-    backgroundColor: Colors.info + '10',
+    gap: 10,
+    backgroundColor: Colors.info + '0D',
     borderRadius: BorderRadius.md,
-    padding: Spacing.md,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 10,
     borderWidth: 1,
-    borderColor: Colors.info + '25',
+    borderColor: Colors.info + '22',
   },
   summaryPhraseIndex: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
     backgroundColor: Colors.info,
     alignItems: 'center',
     justifyContent: 'center',
@@ -2114,66 +2227,63 @@ const styles = StyleSheet.create({
   },
   summaryPhraseIndexText: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: FontWeight.bold,
   },
   summaryPhraseBody: {
     flex: 1,
-    gap: 3,
+    gap: 2,
   },
   summaryPhraseEnglish: {
-    fontSize: FontSize.md,
+    fontSize: FontSize.sm,
     fontWeight: FontWeight.bold,
-    color: Colors.primary,
-    lineHeight: 22,
+    color: Colors.primaryLight,
+    lineHeight: 20,
   },
   summaryPhraseJapanese: {
-    fontSize: FontSize.sm,
+    fontSize: FontSize.xs,
     color: Colors.textSecondary,
   },
   summaryPhraseContext: {
-    fontSize: FontSize.xs,
+    fontSize: 10,
     color: Colors.textMuted,
-    lineHeight: 18,
-    marginTop: 2,
+    lineHeight: 16,
+    marginTop: 1,
   },
 
-  /* 採点根拠カード */
+  /* 採点根拠カード（折りたたみ式） */
   scoringBasisCard: {
-    marginHorizontal: 0,
-    marginBottom: Spacing.sm,
     backgroundColor: Colors.info + '0E',
     borderRadius: BorderRadius.lg,
     borderWidth: 1,
     borderColor: Colors.info + '25',
-    padding: Spacing.md,
-    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 11,
+    gap: 8,
   },
   scoringBasisHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    flexWrap: 'wrap',
   },
   scoringBasisTitle: {
-    fontSize: FontSize.sm,
+    fontSize: FontSize.xs,
     fontWeight: FontWeight.bold,
     color: Colors.info,
   },
   scoringBasisBadge: {
-    marginLeft: 'auto' as any,
     backgroundColor: Colors.info + '20',
     borderRadius: BorderRadius.sm,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
   },
   scoringBasisBadgeText: {
-    fontSize: 11,
+    fontSize: 10,
     color: Colors.info,
     fontWeight: FontWeight.semibold,
   },
   scoringBasisRow: {
-    gap: 2,
+    gap: 1,
   },
   scoringBasisLabel: {
     fontSize: FontSize.xs,
@@ -2183,21 +2293,21 @@ const styles = StyleSheet.create({
   scoringBasisText: {
     fontSize: FontSize.xs,
     color: Colors.textSecondary,
-    lineHeight: 18,
+    lineHeight: 17,
   },
   scoringBasisNote: {
     fontSize: 10,
     color: Colors.textMuted,
     fontStyle: 'italic' as any,
-    marginTop: 2,
   },
 
   encouragementCard: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
-    backgroundColor: 'rgba(79,70,229,0.1)', borderRadius: BorderRadius.xl,
-    padding: Spacing.lg, borderWidth: 1, borderColor: Colors.primary + '30',
+    flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm,
+    backgroundColor: 'rgba(124,58,237,0.10)', borderRadius: BorderRadius.lg,
+    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
+    borderWidth: 1, borderColor: Colors.primary + '25',
   },
-  encouragementText: { flex: 1, fontSize: FontSize.md, color: Colors.primaryLight, lineHeight: 24 },
+  encouragementText: { flex: 1, fontSize: FontSize.sm, color: Colors.primaryLight, lineHeight: 21 },
   summaryContainer: { flex: 1 },
   summaryActions: { gap: Spacing.sm },
 
