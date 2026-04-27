@@ -57,6 +57,8 @@
     </dict>
     <key>NSCameraUsageDescription</key>
     <string>プロフィール画像の設定に使用します</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>プロフィール画像の選択に使用します</string>
     <key>NSFaceIDUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to access your Face ID biometric data.</string>
     <key>NSMicrophoneUsageDescription</key>
